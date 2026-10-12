@@ -474,6 +474,10 @@ class SettingsWindow(QMainWindow):
         self.cb_private.setChecked(self.config.get("mask_private_browsing", True))
         layout.addWidget(self.cb_private)
 
+        self.cb_dynamic_taglines = QCheckBox("Enable Smart Dynamic Details (sheet names, web platforms, active files)")
+        self.cb_dynamic_taglines.setChecked(self.config.get("enable_dynamic_taglines", True))
+        layout.addWidget(self.cb_dynamic_taglines)
+
         # Timing Spinners
         time_frame = QFrame()
         time_frame.setStyleSheet("background-color: #2B2D31; border-radius: 6px; padding: 10px;")
@@ -723,6 +727,7 @@ class SettingsWindow(QMainWindow):
         self.config["application_id"] = app_id
         self.config["auto_close_with_discord"] = self.cb_autoclose.isChecked()
         self.config["mask_private_browsing"] = self.cb_private.isChecked()
+        self.config["enable_dynamic_taglines"] = self.cb_dynamic_taglines.isChecked()
         self.config["debounce_seconds"] = self.spin_debounce.value()
         self.config["idle_timeout_seconds"] = self.spin_idle.value()
         self.config["taglines"] = self.current_taglines

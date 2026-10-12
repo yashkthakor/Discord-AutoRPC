@@ -18,6 +18,8 @@ import win32con
 import win32gui
 import win32process
 
+from context import extract_dynamic_tagline
+
 logger = logging.getLogger("autorpc.detector")
 
 # ---------------------------------------------------------------------------
@@ -186,10 +188,11 @@ def resolve_tagline(app: AppInfo, config: dict) -> str:
 
     Priority:
       1. config.json overrides  ({"overrides": {"exe.exe": {"tagline": "..."}}})
-      2. config.json taglines   ({"taglines": {"exe.exe": "..."}})
-      3. Built-in known-app table
-      4. Keyword matching against exe name / display name
-      5. Empty string (no details line shown)
+      2. Dynamic Win32 semantic extraction (sheet names, web platforms, active files)
+      3. config.json taglines   ({"taglines": {"exe.exe": "..."}})
+      4. Built-in known-app table
+      5. Keyword matching against exe name / display name
+      6. Empty string (no details line shown)
     """
     key = app.exe_name.lower()
 
@@ -201,23 +204,33 @@ def resolve_tagline(app: AppInfo, config: dict) -> str:
             if tagline:
                 return tagline
 
-    # 2. Dedicated taglines section
+    # 2. Dynamic Win32 semantic extraction
+    dynamic = extract_dynamic_tagline(
+        exe_name=app.exe_name,
+        window_title=app.window_title,
+        display_name=app.display_name,
+        config=config,
+    )
+    if dynamic:
+        return dynamic
+
+    # 3. Dedicated taglines section
     taglines = config.get("taglines", {})
     for k, val in taglines.items():
         if k.lower() == key:
             return val
 
-    # 3. Built-in table
+    # 4. Built-in table
     if key in _BUILTIN_TAGLINES:
         return _BUILTIN_TAGLINES[key]
 
-    # 4. Keyword matching
+    # 5. Keyword matching
     search_text = f"{key} {app.display_name}".lower()
     for keywords, tagline in _KEYWORD_TAGLINES:
         if any(kw in search_text for kw in keywords):
             return tagline
 
-    # 5. No tagline
+    # 6. No tagline
     return ""
 
 
@@ -379,9 +392,16 @@ class Detector:
 
         # Is it the same as the already-confirmed app?
         if raw == self._confirmed_app:
-            # Update window title in case it changed
+            # Update window title and re-evaluate dynamic tagline if window title changed
             if self._confirmed_app is not None:
-                self._confirmed_app.window_title = raw.window_title
+                if self._confirmed_app.window_title != raw.window_title:
+                    self._confirmed_app.window_title = raw.window_title
+                    new_tagline = resolve_tagline(self._confirmed_app, self.config)
+                    if new_tagline != self._confirmed_app.tagline:
+                        self._confirmed_app.tagline = new_tagline
+                        logger.info(
+                            f"Context updated for {self._confirmed_app.display_name}: '{new_tagline}'"
+                        )
             return self._confirmed_app
 
         # New candidate — check debounce

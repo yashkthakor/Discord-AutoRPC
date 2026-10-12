@@ -50,7 +50,8 @@ DEFAULT_CONFIG: dict = {
     },
     "overrides": {},
     "steamgriddb_api_key": "",
-    "upload_host": "catbox",
+    "upload_host": "freeimage",
+    "enable_dynamic_taglines": True,
 }
 
 
