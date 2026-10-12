@@ -377,6 +377,108 @@ class OnboardingWizardDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# 1-Click Quick Rename Dialog (Qt)
+# ---------------------------------------------------------------------------
+
+class QuickRenameDialog(QDialog):
+    """Modern 1-click modal to rename an active application and optional tagline."""
+
+    def __init__(self, exe_name: str, current_name: str, current_tagline: str = "", on_saved=None, parent=None):
+        super().__init__(parent)
+        self.exe_name = exe_name.strip()
+        self.on_saved = on_saved
+        self.setWindowTitle(f"Rename Active App — {self.exe_name}")
+        self.setFixedSize(480, 310)
+        self.setStyleSheet(DISCORD_DARK_QSS)
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
+
+        self._build_ui(current_name, current_tagline)
+
+    def _build_ui(self, current_name: str, current_tagline: str):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        # Header Card
+        header = QFrame()
+        header.setStyleSheet("background-color: #2B2D31; border-radius: 8px; padding: 10px;")
+        h_layout = QVBoxLayout(header)
+        h_layout.setContentsMargins(10, 8, 10, 8)
+
+        title = QLabel(f"🏷️ Rename '{self.exe_name}'")
+        title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        h_layout.addWidget(title)
+
+        desc = QLabel("Customize how this application and status appear on your Discord profile.")
+        desc.setStyleSheet("color: #949BA4; font-size: 12px;")
+        h_layout.addWidget(desc)
+        layout.addWidget(header)
+
+        # Display Name
+        lbl_name = QLabel("Custom Display Name (shown as 'Playing ...'):")
+        lbl_name.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        layout.addWidget(lbl_name)
+
+        self.input_name = QLineEdit(current_name)
+        self.input_name.setPlaceholderText("e.g. PhotoCraft or Photoshop")
+        self.input_name.setFixedHeight(34)
+        layout.addWidget(self.input_name)
+
+        # Tagline
+        lbl_tag = QLabel("Custom Tagline (optional details line):")
+        layout.addWidget(lbl_tag)
+
+        self.input_tag = QLineEdit(current_tagline)
+        self.input_tag.setPlaceholderText("Leave blank to keep automatic dynamic detail")
+        self.input_tag.setFixedHeight(34)
+        layout.addWidget(self.input_tag)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(btn_cancel)
+
+        btn_save = QPushButton("💾 Save & Apply Instantly")
+        btn_save.setObjectName("PrimaryBtn")
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.clicked.connect(self._save)
+        btn_layout.addWidget(btn_save)
+
+        layout.addLayout(btn_layout)
+
+    def _save(self):
+        new_name = self.input_name.text().strip()
+        if not new_name:
+            QMessageBox.warning(self, "Invalid Name", "Display Name cannot be empty.")
+            return
+
+        new_tagline = self.input_tag.text().strip()
+
+        cfg = load_config()
+        overrides = cfg.setdefault("overrides", {})
+        overrides[self.exe_name.lower()] = {
+            "name": new_name,
+            "tagline": new_tagline,
+        }
+        save_config(cfg)
+
+        if self.on_saved:
+            self.on_saved(cfg, new_name, new_tagline)
+
+        QMessageBox.information(
+            self,
+            "Name Saved",
+            f"Successfully updated '{self.exe_name}' to display as '{new_name}' on Discord!",
+        )
+        self.accept()
+
+
+# ---------------------------------------------------------------------------
 # Modern Settings & Live Terminal Window (Qt)
 # ---------------------------------------------------------------------------
 
@@ -387,9 +489,10 @@ class SettingsWindow(QMainWindow):
         super().__init__()
         self.on_saved = on_saved
         self.config = load_config()
+        self.current_overrides = dict(self.config.get("overrides", {}))
 
         self.setWindowTitle("Discord AutoRPC — Settings & Live Terminal")
-        self.resize(720, 580)
+        self.resize(750, 600)
         self.setStyleSheet(DISCORD_DARK_QSS)
         if ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(ICON_PATH)))
@@ -415,7 +518,12 @@ class SettingsWindow(QMainWindow):
         self._build_general_tab()
         self.tabs.addTab(self.tab_general, "⚙️ General")
 
-        # Tab 2: Taglines
+        # Tab 2: App Names & Overrides
+        self.tab_overrides = QWidget()
+        self._build_overrides_tab()
+        self.tabs.addTab(self.tab_overrides, "🏷️ App Names & Overrides")
+
+        # Tab 3: Taglines
         self.tab_taglines = QWidget()
         self._build_taglines_tab()
         self.tabs.addTab(self.tab_taglines, "💬 Taglines")
@@ -501,6 +609,89 @@ class SettingsWindow(QMainWindow):
 
         layout.addWidget(time_frame)
         layout.addStretch()
+
+    def _build_overrides_tab(self):
+        layout = QVBoxLayout(self.tab_overrides)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        desc = QLabel("Customize display names and custom taglines for specific programs:")
+        desc.setStyleSheet("color: #949BA4;")
+        layout.addWidget(desc)
+
+        # Table: Executable, Custom Name, Custom Tagline
+        self.override_table = QTableWidget(0, 3)
+        self.override_table.setHorizontalHeaderLabels(["Executable", "Display Name", "Custom Tagline"])
+        self.override_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.override_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.override_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.override_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        layout.addWidget(self.override_table)
+
+        self._populate_override_table()
+
+        # Add / Edit row
+        edit_layout = QHBoxLayout()
+        self.input_ovr_exe = QLineEdit()
+        self.input_ovr_exe.setPlaceholderText("exe (e.g. photocraft.exe)")
+        self.input_ovr_exe.setFixedWidth(160)
+        edit_layout.addWidget(self.input_ovr_exe)
+
+        self.input_ovr_name = QLineEdit()
+        self.input_ovr_name.setPlaceholderText("Display Name (e.g. PhotoCraft)")
+        self.input_ovr_name.setFixedWidth(180)
+        edit_layout.addWidget(self.input_ovr_name)
+
+        self.input_ovr_tag = QLineEdit()
+        self.input_ovr_tag.setPlaceholderText("Tagline (optional)")
+        edit_layout.addWidget(self.input_ovr_tag)
+
+        btn_add = QPushButton("Add / Update")
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.clicked.connect(self._add_or_update_override)
+        edit_layout.addWidget(btn_add)
+
+        btn_del = QPushButton("Delete")
+        btn_del.setObjectName("DangerBtn")
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_del.clicked.connect(self._delete_override)
+        edit_layout.addWidget(btn_del)
+
+        layout.addLayout(edit_layout)
+
+    def _populate_override_table(self):
+        self.override_table.setRowCount(0)
+        for row, (exe, data) in enumerate(sorted(self.current_overrides.items())):
+            self.override_table.insertRow(row)
+            self.override_table.setItem(row, 0, QTableWidgetItem(exe))
+            name = data.get("name", "") if isinstance(data, dict) else str(data)
+            tag = data.get("tagline", "") if isinstance(data, dict) else ""
+            self.override_table.setItem(row, 1, QTableWidgetItem(name))
+            self.override_table.setItem(row, 2, QTableWidgetItem(tag))
+
+    def _add_or_update_override(self):
+        exe = self.input_ovr_exe.text().strip().lower()
+        name = self.input_ovr_name.text().strip()
+        tag = self.input_ovr_tag.text().strip()
+        if exe and name:
+            if not exe.endswith(".exe"):
+                exe += ".exe"
+            entry = {"name": name}
+            if tag:
+                entry["tagline"] = tag
+            self.current_overrides[exe] = entry
+            self._populate_override_table()
+            self.input_ovr_exe.clear()
+            self.input_ovr_name.clear()
+            self.input_ovr_tag.clear()
+
+    def _delete_override(self):
+        selected = self.override_table.currentRow()
+        if selected >= 0:
+            exe_item = self.override_table.item(selected, 0)
+            if exe_item:
+                self.current_overrides.pop(exe_item.text().lower(), None)
+                self._populate_override_table()
 
     def _build_taglines_tab(self):
         layout = QVBoxLayout(self.tab_taglines)
@@ -732,6 +923,7 @@ class SettingsWindow(QMainWindow):
         self.config["idle_timeout_seconds"] = self.spin_idle.value()
         self.config["taglines"] = self.current_taglines
         self.config["ignored_exes"] = self.current_ignored
+        self.config["overrides"] = self.current_overrides
 
         set_autostart_enabled(self.cb_autostart.isChecked())
         save_config(self.config)
@@ -776,3 +968,21 @@ def run_onboarding_wizard() -> Optional[dict]:
     if wizard.exec() == QDialog.DialogCode.Accepted:
         return wizard.result_config
     return None
+
+
+def open_quick_rename_gui(
+    exe_name: str,
+    current_name: str,
+    current_tagline: str = "",
+    on_saved: Optional[Callable] = None,
+):
+    """Launch the 1-click Quick Rename modal dialog."""
+    app = _ensure_qapp()
+    dialog = QuickRenameDialog(
+        exe_name=exe_name,
+        current_name=current_name,
+        current_tagline=current_tagline,
+        on_saved=on_saved,
+    )
+    dialog.exec()
+

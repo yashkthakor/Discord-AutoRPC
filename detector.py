@@ -8,6 +8,7 @@ and applies ignore / whitelist / debounce rules before reporting.
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,24 +50,62 @@ class AppInfo:
 # Display-name resolution
 # ---------------------------------------------------------------------------
 
-def _file_description(exe_path: str) -> str | None:
-    """Pull FileDescription from the exe's version-info resource."""
+_CATEGORY_SUFFIX_REGEX = re.compile(
+    r"\s*[-—–]?\s*("
+    r"image editor|photo editor|"
+    r"text editor|code editor|"
+    r"media player|video player|audio player|music player|"
+    r"spreadsheet software|word processor|"
+    r"web browser|"
+    r"client bootstrapper|client|"
+    r"desktop app(?:lication)?|"
+    r"for windows|"
+    r"64-bit|x64|32-bit|x86"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_display_name(text: str) -> str:
+    """Strip marketing categories, platform tags, and architecture suffixes."""
+    if not text:
+        return ""
+    t = text.strip()
+    t = _CATEGORY_SUFFIX_REGEX.sub("", t).strip()
+    return t
+
+
+def _extract_pe_version_strings(exe_path: str) -> tuple[str | None, str | None]:
+    """Pull (ProductName, FileDescription) from the exe's version-info resource."""
     try:
-        info = win32api.GetFileVersionInfo(exe_path, "\\")
-        # Build the translation query
-        lang_info = win32api.GetFileVersionInfo(
-            exe_path, "\\VarFileInfo\\Translation"
-        )
+        lang_info = win32api.GetFileVersionInfo(exe_path, "\\VarFileInfo\\Translation")
         if not lang_info:
-            return None
+            return None, None
         lang, codepage = lang_info[0]
-        query = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\FileDescription"
-        desc = win32api.GetFileVersionInfo(exe_path, query)
-        if desc and desc.strip():
-            return desc.strip()
+
+        query_desc = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\FileDescription"
+        query_prod = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\ProductName"
+
+        desc = None
+        prod = None
+
+        try:
+            d = win32api.GetFileVersionInfo(exe_path, query_desc)
+            if d and d.strip():
+                desc = d.strip()
+        except Exception:
+            pass
+
+        try:
+            p = win32api.GetFileVersionInfo(exe_path, query_prod)
+            if p and p.strip():
+                prod = p.strip()
+        except Exception:
+            pass
+
+        return prod, desc
     except Exception:
-        pass
-    return None
+        return None, None
 
 
 def resolve_display_name(app: AppInfo, overrides: dict) -> str:
@@ -75,7 +114,7 @@ def resolve_display_name(app: AppInfo, overrides: dict) -> str:
 
     Priority:
       1. config.json overrides  (exact exe_name match, case-insensitive)
-      2. exe's FileDescription via version-info
+      2. Smart PE metadata (ProductName / cleaned FileDescription)
       3. exe filename without extension, Title Cased
     """
     key = app.exe_name.lower()
@@ -87,9 +126,26 @@ def resolve_display_name(app: AppInfo, overrides: dict) -> str:
         if isinstance(override, str):
             return override
 
-    desc = _file_description(app.exe_path)
+    prod, desc = _extract_pe_version_strings(app.exe_path)
+
+    # If FileDescription starts with ProductName (e.g. 'PhotoCraft image editor' starts with 'PhotoCraft'),
+    # ProductName is the concise brand name!
+    if prod and desc and desc.lower().startswith(prod.lower()) and len(prod) >= 3:
+        clean_prod = _clean_display_name(prod)
+        if clean_prod:
+            return clean_prod
+
+    # Otherwise, clean the FileDescription (strips suffixes like ' image editor', ' media player')
     if desc:
-        return desc
+        clean_desc = _clean_display_name(desc)
+        if clean_desc:
+            return clean_desc
+
+    # Fall back to cleaned ProductName if valid
+    if prod:
+        clean_prod = _clean_display_name(prod)
+        if clean_prod and not clean_prod.endswith(".exe"):
+            return clean_prod
 
     stem = Path(app.exe_name).stem
     return stem.replace("_", " ").replace("-", " ").title()

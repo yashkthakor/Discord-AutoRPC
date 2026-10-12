@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw
 
 from config import load_config, is_configured, CONFIG_PATH
 from detector import Detector, AppInfo, load_ignore_list, save_ignore_list
-from gui import run_onboarding_wizard, open_settings_gui
+from gui import run_onboarding_wizard, open_settings_gui, open_quick_rename_gui
 from icons import get_icon_url
 from presence import PresenceManager
 from updater import __version__, check_updates_async
@@ -234,6 +234,39 @@ def _make_menu(state, tray, presence):
                 logger.error(f"Failed to open settings window: {exc}")
         threading.Thread(target=_launch, daemon=True).start()
 
+    def rename_active_app(icon, item):
+        app: AppInfo | None = state.get("current_app")
+        if app is None:
+            return
+
+        def _launch():
+            try:
+                def _on_rename_saved(cfg, new_name, new_tagline):
+                    state["_detector"] = None
+                    cur = state.get("current_app")
+                    if cur:
+                        cur.display_name = new_name
+                        if new_tagline:
+                            cur.tagline = new_tagline
+                        icon_url = get_icon_url(cur.exe_path, new_name, cfg)
+                        presence.update(
+                            display_name=new_name,
+                            icon_url=icon_url,
+                            exe_path=cur.exe_path,
+                            pid=cur.pid,
+                            tagline=cur.tagline,
+                        )
+                open_quick_rename_gui(
+                    exe_name=app.exe_name,
+                    current_name=app.display_name,
+                    current_tagline=app.tagline,
+                    on_saved=_on_rename_saved,
+                )
+            except Exception as exc:
+                logger.error(f"Failed to open quick rename dialog: {exc}")
+
+        threading.Thread(target=_launch, daemon=True).start()
+
     def open_log(icon, item):
         try:
             os.startfile(str(LOG_PATH))
@@ -255,6 +288,11 @@ def _make_menu(state, tray, presence):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("⚙️ Settings", open_settings),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            lambda item: f"🏷️ Rename Active App ({state['current_app'].display_name})..." if state.get("current_app") else "🏷️ Rename Active App...",
+            rename_active_app,
+            enabled=lambda item: state.get("current_app") is not None,
+        ),
         pystray.MenuItem(
             lambda item: "▶ Resume" if state["paused"] else "⏸ Pause",
             toggle_pause,
