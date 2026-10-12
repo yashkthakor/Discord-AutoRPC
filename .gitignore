@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# PyInstaller / Build artifacts
+build/
+dist/
+*.spec
+
+# Local AutoRPC user data & logs (Keep private)
+config.json
+icon_cache.json
+ignore_list.json
+autorpc.log*
+
+# Test artifacts
+sample_*.png
+test_*.png
+
+# IDE & OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

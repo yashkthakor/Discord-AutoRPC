@@ -1,0 +1,27 @@
+name: Bug Report
+description: File a bug report to help improve Discord AutoRPC
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a bug! Please fill out the form below.
+  - type: input
+    id: app_info
+    attributes:
+      label: Which application/game was not detected or had issues?
+      placeholder: e.g. Notion, Cyberpunk 2077, Chrome
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Describe what happened
+      placeholder: What did you expect vs what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (from autorpc.log or tray menu "Open log")
+      render: text

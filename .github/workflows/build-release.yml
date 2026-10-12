@@ -1,0 +1,49 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Standalone Executable with PyInstaller
+        run: |
+          python -m PyInstaller --noconsole --onefile --icon="assets/icon.ico" --name="DiscordAutoRPC" main.py
+
+      - name: Package Release Archive
+        run: |
+          Compress-Archive -Path "dist\DiscordAutoRPC.exe", "config.example.json", "LICENSE", "README.md" -DestinationPath "dist\DiscordAutoRPC-Windows-x64.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/DiscordAutoRPC.exe
+            dist/DiscordAutoRPC-Windows-x64.zip
+          draft: false
+          prerelease: true
+          generate_release_notes: true

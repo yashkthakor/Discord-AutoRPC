@@ -1,0 +1,43 @@
+{
+    "application_id": "",
+    "poll_interval": 5,
+    "debounce_seconds": 10,
+    "idle_timeout_seconds": 60,
+    "default_icon_url": "https://cdn.discordapp.com/embed/avatars/0.png",
+    "auto_close_with_discord": true,
+    "mask_private_browsing": true,
+    "whitelist_only": false,
+    "whitelist": [],
+    "ignored_exes": [
+        "explorer.exe",
+        "Discord.exe",
+        "SearchHost.exe",
+        "StartMenuExperienceHost.exe",
+        "ShellExperienceHost.exe",
+        "SystemSettings.exe",
+        "ApplicationFrameHost.exe",
+        "TextInputHost.exe",
+        "LockApp.exe",
+        "ScreenClippingHost.exe",
+        "WidgetService.exe",
+        "Widgets.exe"
+    ],
+    "taglines": {
+        "notion.exe": "Working on a document",
+        "antigravity ide.exe": "Working on a project",
+        "chrome.exe": "Surfing the internet",
+        "firefox.exe": "Surfing the internet",
+        "msedge.exe": "Surfing the internet",
+        "brave.exe": "Surfing the internet",
+        "zen.exe": "Surfing the internet"
+    },
+    "overrides": {
+        "example_game.exe": {
+            "name": "My Cool Game",
+            "tagline": "Playing a custom game",
+            "icon_url": "https://example.com/icon.png"
+        }
+    },
+    "steamgriddb_api_key": "",
+    "upload_host": "catbox"
+}
