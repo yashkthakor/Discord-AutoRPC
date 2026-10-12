@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw
 
 from config import load_config, is_configured, CONFIG_PATH
 from detector import Detector, AppInfo, load_ignore_list, save_ignore_list
-from gui import OnboardingWizard, open_settings_gui
+from gui import run_onboarding_wizard, open_settings_gui
 from icons import get_icon_url
 from presence import PresenceManager
 from updater import __version__, check_updates_async
@@ -280,8 +280,7 @@ def main() -> None:
     # First-Run Experience: Launch guided setup wizard if unconfigured
     if not is_configured(config):
         logger.info("No valid Application ID found. Launching Setup Wizard...")
-        wizard = OnboardingWizard()
-        config = wizard.run()
+        config = run_onboarding_wizard()
         if not config or not is_configured(config):
             logger.info("Setup wizard canceled or closed. Exiting.")
             sys.exit(0)

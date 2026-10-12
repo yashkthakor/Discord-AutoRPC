@@ -1,15 +1,46 @@
 """
-gui.py — Desktop GUI for First-Run Setup & Settings Management.
+gui.py — Modern PyQt6 Desktop GUI for Onboarding, Settings, and Real-Time Logs.
 
-Built with Tkinter (zero external dependencies).
-Features a Discord-inspired dark theme.
+Features:
+  • Discord-inspired dark design system (QSS)
+  • First-Run Guided Setup Wizard (QDialog)
+  • Full-Featured Settings Window (QMainWindow)
+  • Live Real-Time Terminal & Process Log Streaming
+  • Copy-to-Clipboard & Log File Export
 """
 
 import logging
-import tkinter as tk
-from tkinter import ttk, messagebox
+import os
+import subprocess
+import sys
 import webbrowser
+from pathlib import Path
 from typing import Callable, Optional
+
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon, QColor, QTextCursor
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QCheckBox,
+    QSpinBox,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QListWidget,
+    QPlainTextEdit,
+    QFileDialog,
+    QMessageBox,
+    QFrame,
+)
 
 from config import (
     load_config,
@@ -17,456 +48,726 @@ from config import (
     validate_app_id,
     is_autostart_enabled,
     set_autostart_enabled,
+    CONFIG_PATH,
 )
+from icons import clear_icon_cache
 
 logger = logging.getLogger("autorpc.gui")
+BASE_DIR = Path(__file__).resolve().parent
+LOG_PATH = BASE_DIR / "autorpc.log"
+ICON_PATH = BASE_DIR / "assets" / "icon.png"
 
-# Discord Color Palette
-BG_DARK = "#1E1F22"       # Main background
-BG_PANEL = "#2B2D31"      # Card / panel background
-BG_INPUT = "#313338"      # Input fields
-TEXT_PRIMARY = "#F2F3F5"  # Primary white text
-TEXT_MUTED = "#949BA4"    # Secondary muted text
-ACCENT_BLURPLE = "#5865F2"# Discord Blurple
-ACCENT_HOVER = "#4752C4"  # Hover Blurple
-ACCENT_GREEN = "#23A55A"  # Success green
-ACCENT_RED = "#F23F43"    # Error red
-BORDER_COLOR = "#383A40"  # Subtle border
+# ---------------------------------------------------------------------------
+# Modern Discord Dark Theme QSS
+# ---------------------------------------------------------------------------
+
+DISCORD_DARK_QSS = """
+QWidget {
+    background-color: #1E1F22;
+    color: #F2F3F5;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px;
+}
+
+/* Tab Widget */
+QTabWidget::pane {
+    border: 1px solid #383A40;
+    background-color: #2B2D31;
+    border-radius: 8px;
+    padding: 10px;
+}
+QTabBar::tab {
+    background-color: #1E1F22;
+    color: #949BA4;
+    padding: 8px 16px;
+    margin-right: 4px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    font-weight: bold;
+}
+QTabBar::tab:selected {
+    background-color: #2B2D31;
+    color: #F2F3F5;
+    border-bottom: 2px solid #5865F2;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #2B2D31;
+    color: #DBDEE1;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #4E5058;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 5px;
+    padding: 7px 14px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background-color: #6D6F78;
+}
+QPushButton:pressed {
+    background-color: #383A40;
+}
+QPushButton#PrimaryBtn {
+    background-color: #5865F2;
+}
+QPushButton#PrimaryBtn:hover {
+    background-color: #4752C4;
+}
+QPushButton#PrimaryBtn:pressed {
+    background-color: #3C45A5;
+}
+QPushButton#SuccessBtn {
+    background-color: #23A55A;
+}
+QPushButton#SuccessBtn:hover {
+    background-color: #1E8E4D;
+}
+QPushButton#DangerBtn {
+    background-color: #DA373C;
+}
+QPushButton#DangerBtn:hover {
+    background-color: #BA2D31;
+}
+
+/* Inputs & Spinners */
+QLineEdit, QSpinBox {
+    background-color: #313338;
+    color: #F2F3F5;
+    border: 1px solid #383A40;
+    border-radius: 5px;
+    padding: 6px 10px;
+    selection-background-color: #5865F2;
+}
+QLineEdit:focus, QSpinBox:focus {
+    border: 1px solid #5865F2;
+}
+
+/* Checkboxes */
+QCheckBox {
+    color: #F2F3F5;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid #4E5058;
+    background-color: #313338;
+}
+QCheckBox::indicator:checked {
+    background-color: #5865F2;
+    border-color: #5865F2;
+}
+
+/* Tables & Lists */
+QTableWidget, QListWidget {
+    background-color: #1E1F22;
+    color: #F2F3F5;
+    border: 1px solid #383A40;
+    border-radius: 6px;
+    gridline-color: #2B2D31;
+    selection-background-color: #35373C;
+    selection-color: #F2F3F5;
+}
+QHeaderView::section {
+    background-color: #2B2D31;
+    color: #949BA4;
+    padding: 6px;
+    border: none;
+    border-bottom: 1px solid #383A40;
+    font-weight: bold;
+}
+
+/* Terminal Console View */
+QPlainTextEdit#TerminalConsole {
+    background-color: #111214;
+    color: #DCDDDE;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    border: 1px solid #2B2D31;
+    border-radius: 6px;
+    padding: 8px;
+}
+
+/* Scrollbars */
+QScrollBar:vertical {
+    border: none;
+    background-color: #2B2D31;
+    width: 10px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background-color: #1E1F22;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #4E5058;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+"""
+
+# ---------------------------------------------------------------------------
+# Qt Log Handler for Live Terminal
+# ---------------------------------------------------------------------------
+
+class LogEmitter(QObject):
+    log_signal = pyqtSignal(str)
 
 
-def _center_window(win: tk.Tk | tk.Toplevel, width: int, height: int):
-    """Center a tkinter window on the active monitor."""
-    win.update_idletasks()
-    sw = win.winfo_screenwidth()
-    sh = win.winfo_screenheight()
-    x = max(0, (sw - width) // 2)
-    y = max(0, (sh - height) // 2)
-    win.geometry(f"{width}x{height}+{x}+{y}")
+class QtLogHandler(logging.Handler):
+    """Custom logging handler that routes log records to a Qt Signal."""
+    def __init__(self, emitter: LogEmitter):
+        super().__init__()
+        self.emitter = emitter
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.emitter.log_signal.emit(msg)
+        except Exception:
+            pass
+
+
+GLOBAL_EMITTER = LogEmitter()
+QT_LOG_HANDLER = QtLogHandler(GLOBAL_EMITTER)
+QT_LOG_HANDLER.setLevel(logging.DEBUG)
+QT_LOG_HANDLER.setFormatter(
+    logging.Formatter("[%(asctime)s] %(levelname)-7s %(name)s - %(message)s", datefmt="%H:%M:%S")
+)
+logging.getLogger().addHandler(QT_LOG_HANDLER)
+
+
+def _ensure_qapp() -> QApplication:
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+        app.setStyleSheet(DISCORD_DARK_QSS)
+        if ICON_PATH.exists():
+            app.setWindowIcon(QIcon(str(ICON_PATH)))
+    return app
 
 
 # ---------------------------------------------------------------------------
-# First-Run Setup Wizard
+# First-Run Setup Wizard (Qt)
 # ---------------------------------------------------------------------------
 
-class OnboardingWizard:
-    """Guided 60-second wizard for first-time Application ID setup."""
+class OnboardingWizardDialog(QDialog):
+    """Modern 60-second guided wizard for first-run Application ID setup."""
 
-    def __init__(self, on_success: Optional[Callable[[dict], None]] = None):
-        self.on_success = on_success
-        self.root = tk.Tk()
-        self.root.title("Discord AutoRPC — Setup")
-        self.root.configure(bg=BG_DARK)
-        self.root.resizable(False, False)
-        _center_window(self.root, 540, 460)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Discord AutoRPC — First-Run Setup")
+        self.setFixedSize(540, 460)
+        self.setStyleSheet(DISCORD_DARK_QSS)
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
 
-        self._build_ui()
         self.result_config = None
+        self._build_ui()
 
     def _build_ui(self):
-        # Header Container
-        header_frame = tk.Frame(self.root, bg=BG_PANEL, pady=16, padx=20)
-        header_frame.pack(fill="x")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
 
-        title_lbl = tk.Label(
-            header_frame,
-            text="🚀 Welcome to Discord AutoRPC",
-            font=("Segoe UI", 14, "bold"),
-            fg=TEXT_PRIMARY,
-            bg=BG_PANEL,
-        )
-        title_lbl.pack(anchor="w")
+        # Header Card
+        header = QFrame()
+        header.setStyleSheet("background-color: #2B2D31; border-radius: 8px; padding: 10px;")
+        h_layout = QVBoxLayout(header)
+        h_layout.setContentsMargins(12, 10, 12, 10)
 
-        sub_lbl = tk.Label(
-            header_frame,
-            text="Let's connect your personal Discord Application in 3 quick steps.",
-            font=("Segoe UI", 9),
-            fg=TEXT_MUTED,
-            bg=BG_PANEL,
-        )
-        sub_lbl.pack(anchor="w", pady=(4, 0))
+        title = QLabel("🚀 Welcome to Discord AutoRPC")
+        title.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        title.setStyleSheet("color: #FFFFFF;")
+        h_layout.addWidget(title)
 
-        # Steps Container
-        body_frame = tk.Frame(self.root, bg=BG_DARK, padx=24, pady=16)
-        body_frame.pack(fill="both", expand=True)
+        subtitle = QLabel("Connect Discord AutoRPC to your Discord client in 3 quick steps.")
+        subtitle.setStyleSheet("color: #949BA4; font-size: 13px;")
+        h_layout.addWidget(subtitle)
+        layout.addWidget(header)
 
         # Step 1
-        s1_lbl = tk.Label(
-            body_frame,
-            text="Step 1: Open the Discord Developer Portal",
-            font=("Segoe UI", 10, "bold"),
-            fg=TEXT_PRIMARY,
-            bg=BG_DARK,
-        )
-        s1_lbl.pack(anchor="w")
+        s1_lbl = QLabel("Step 1: Open the Discord Developer Portal")
+        s1_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        layout.addWidget(s1_lbl)
 
-        btn_portal = tk.Button(
-            body_frame,
-            text="🌐 Open Discord Developer Portal",
-            font=("Segoe UI", 9, "bold"),
-            bg=ACCENT_BLURPLE,
-            fg="white",
-            activebackground=ACCENT_HOVER,
-            activeforeground="white",
-            relief="flat",
-            cursor="hand2",
-            padx=12,
-            pady=6,
-            command=lambda: webbrowser.open("https://discord.com/developers/applications"),
-        )
-        btn_portal.pack(anchor="w", pady=(6, 12))
+        btn_portal = QPushButton("🌐 Open Discord Developer Portal")
+        btn_portal.setObjectName("PrimaryBtn")
+        btn_portal.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_portal.setFixedHeight(34)
+        btn_portal.clicked.connect(lambda: webbrowser.open("https://discord.com/developers/applications"))
+        layout.addWidget(btn_portal)
 
         # Step 2
-        s2_lbl = tk.Label(
-            body_frame,
-            text="Step 2: Create a Free Application",
-            font=("Segoe UI", 10, "bold"),
-            fg=TEXT_PRIMARY,
-            bg=BG_DARK,
-        )
-        s2_lbl.pack(anchor="w")
+        s2_lbl = QLabel("Step 2: Create a Free Application")
+        s2_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        layout.addWidget(s2_lbl)
 
-        s2_desc = tk.Label(
-            body_frame,
-            text="Click 'New Application' in the top right. Give it any name you want\n(e.g., 'My Activities' or your gamer tag), then click Create.",
-            font=("Segoe UI", 9),
-            fg=TEXT_MUTED,
-            bg=BG_DARK,
-            justify="left",
-        )
-        s2_desc.pack(anchor="w", pady=(2, 12))
+        s2_desc = QLabel("In the portal, click 'New Application' in the top right. Give it any name you want (e.g., 'My Activity' or your username), and click Create.")
+        s2_desc.setStyleSheet("color: #949BA4;")
+        s2_desc.setWordWrap(True)
+        layout.addWidget(s2_desc)
 
         # Step 3
-        s3_lbl = tk.Label(
-            body_frame,
-            text="Step 3: Paste your Application ID",
-            font=("Segoe UI", 10, "bold"),
-            fg=TEXT_PRIMARY,
-            bg=BG_DARK,
-        )
-        s3_lbl.pack(anchor="w")
+        s3_lbl = QLabel("Step 3: Paste your Application ID")
+        s3_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        layout.addWidget(s3_lbl)
 
-        self.id_var = tk.StringVar()
-        self.entry_id = tk.Entry(
-            body_frame,
-            textvariable=self.id_var,
-            font=("Segoe UI", 11),
-            bg=BG_INPUT,
-            fg=TEXT_PRIMARY,
-            insertbackground=TEXT_PRIMARY,
-            relief="flat",
-            highlightthickness=1,
-            highlightbackground=BORDER_COLOR,
-            highlightcolor=ACCENT_BLURPLE,
-        )
-        self.entry_id.pack(fill="x", pady=(6, 4), ipady=5)
-        self.entry_id.focus_set()
+        self.input_id = QLineEdit()
+        self.input_id.setPlaceholderText("Paste your 17–20 digit Application ID here...")
+        self.input_id.setFixedHeight(34)
+        self.input_id.textChanged.connect(self._validate_input)
+        layout.addWidget(self.input_id)
 
-        self.err_lbl = tk.Label(
-            body_frame,
-            text="",
-            font=("Segoe UI", 9),
-            fg=ACCENT_RED,
-            bg=BG_DARK,
-        )
-        self.err_lbl.pack(anchor="w")
+        self.err_lbl = QLabel("")
+        self.err_lbl.setStyleSheet("color: #F23F43; font-size: 12px;")
+        layout.addWidget(self.err_lbl)
 
-        # Footer
-        footer = tk.Frame(self.root, bg=BG_PANEL, padx=20, pady=12)
-        footer.pack(fill="x", side="bottom")
+        layout.addStretch()
 
-        btn_save = tk.Button(
-            footer,
-            text="✓ Save & Launch AutoRPC",
-            font=("Segoe UI", 10, "bold"),
-            bg=ACCENT_GREEN,
-            fg="white",
-            relief="flat",
-            cursor="hand2",
-            padx=16,
-            pady=6,
-            command=self._handle_save,
-        )
-        btn_save.pack(side="right")
+        # Bottom Action Bar
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
 
-        btn_exit = tk.Button(
-            footer,
-            text="Cancel",
-            font=("Segoe UI", 9),
-            bg=BG_INPUT,
-            fg=TEXT_MUTED,
-            relief="flat",
-            cursor="hand2",
-            padx=12,
-            pady=6,
-            command=self.root.destroy,
-        )
-        btn_exit.pack(side="right", padx=(0, 10))
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(btn_cancel)
 
-    def _handle_save(self):
-        val = self.id_var.get().strip()
+        self.btn_save = QPushButton("✓ Save & Launch AutoRPC")
+        self.btn_save.setObjectName("SuccessBtn")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.setFixedHeight(34)
+        self.btn_save.clicked.connect(self._save_and_start)
+        btn_layout.addWidget(self.btn_save)
+
+        layout.addLayout(btn_layout)
+
+    def _validate_input(self):
+        val = self.input_id.text().strip()
+        if not val:
+            self.err_lbl.setText("")
+            return
+        valid, err = validate_app_id(val)
+        if valid:
+            self.err_lbl.setStyleSheet("color: #23A55A; font-size: 12px;")
+            self.err_lbl.setText("✓ Valid Discord Application ID")
+        else:
+            self.err_lbl.setStyleSheet("color: #F23F43; font-size: 12px;")
+            self.err_lbl.setText(err)
+
+    def _save_and_start(self):
+        val = self.input_id.text().strip()
         valid, err = validate_app_id(val)
         if not valid:
-            self.err_lbl.config(text=err)
+            self.err_lbl.setStyleSheet("color: #F23F43; font-size: 12px;")
+            self.err_lbl.setText(err)
             return
 
-        config = load_config()
-        config["application_id"] = val
-        save_config(config)
-
-        self.result_config = config
-        if self.on_success:
-            self.on_success(config)
-        self.root.destroy()
-
-    def run(self) -> Optional[dict]:
-        self.root.mainloop()
-        return self.result_config
+        cfg = load_config()
+        cfg["application_id"] = val
+        save_config(cfg)
+        self.result_config = cfg
+        self.accept()
 
 
 # ---------------------------------------------------------------------------
-# Settings Management GUI
+# Modern Settings & Live Terminal Window (Qt)
 # ---------------------------------------------------------------------------
 
-class SettingsWindow:
-    """Full-featured Settings GUI accessible from the system tray menu."""
+class SettingsWindow(QMainWindow):
+    """Full-featured modern Qt Settings window with live process terminal."""
 
     def __init__(self, on_saved: Optional[Callable[[dict], None]] = None):
+        super().__init__()
         self.on_saved = on_saved
         self.config = load_config()
 
-        self.win = tk.Tk()
-        self.win.title("Discord AutoRPC — Settings")
-        self.win.configure(bg=BG_DARK)
-        _center_window(self.win, 620, 520)
+        self.setWindowTitle("Discord AutoRPC — Settings & Live Terminal")
+        self.resize(720, 580)
+        self.setStyleSheet(DISCORD_DARK_QSS)
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
 
-        self._apply_styles()
-        self._build_tabs()
+        self._build_ui()
+        self._load_existing_logs()
 
-    def _apply_styles(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TNotebook", background=BG_DARK, borderwidth=0)
-        style.configure("TNotebook.Tab", background=BG_PANEL, foreground=TEXT_MUTED, padding=[16, 6], font=("Segoe UI", 9, "bold"))
-        style.map("TNotebook.Tab", background=[("selected", BG_DARK)], foreground=[("selected", TEXT_PRIMARY)])
+        # Connect live log streaming
+        GLOBAL_EMITTER.log_signal.connect(self._append_log)
 
-    def _build_tabs(self):
-        notebook = ttk.Notebook(self.win)
-        notebook.pack(fill="both", expand=True, padx=12, pady=12)
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
+
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
 
         # Tab 1: General
-        tab_general = tk.Frame(notebook, bg=BG_DARK, padx=16, pady=16)
-        notebook.add(tab_general, text="General")
-        self._build_general_tab(tab_general)
+        self.tab_general = QWidget()
+        self._build_general_tab()
+        self.tabs.addTab(self.tab_general, "⚙️ General")
 
         # Tab 2: Taglines
-        tab_taglines = tk.Frame(notebook, bg=BG_DARK, padx=16, pady=16)
-        notebook.add(tab_taglines, text="Taglines")
-        self._build_taglines_tab(tab_taglines)
+        self.tab_taglines = QWidget()
+        self._build_taglines_tab()
+        self.tabs.addTab(self.tab_taglines, "💬 Taglines")
 
         # Tab 3: Ignored Apps
-        tab_ignored = tk.Frame(notebook, bg=BG_DARK, padx=16, pady=16)
-        notebook.add(tab_ignored, text="Ignored Apps")
-        self._build_ignored_tab(tab_ignored)
+        self.tab_ignored = QWidget()
+        self._build_ignored_tab()
+        self.tabs.addTab(self.tab_ignored, "🚫 Ignored Apps")
+
+        # Tab 4: Live Terminal & Process Logs
+        self.tab_terminal = QWidget()
+        self._build_terminal_tab()
+        self.tabs.addTab(self.tab_terminal, "🖥️ Live Terminal & Logs")
 
         # Bottom Bar
-        footer = tk.Frame(self.win, bg=BG_PANEL, padx=16, pady=10)
-        footer.pack(fill="x", side="bottom")
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
 
-        btn_save = tk.Button(
-            footer, text="Save All Changes", font=("Segoe UI", 9, "bold"),
-            bg=ACCENT_BLURPLE, fg="white", relief="flat", cursor="hand2",
-            padx=16, pady=5, command=self._save_all,
-        )
-        btn_save.pack(side="right")
+        btn_cancel = QPushButton("Close")
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.clicked.connect(self.close)
+        bottom_layout.addWidget(btn_cancel)
 
-        btn_cancel = tk.Button(
-            footer, text="Close", font=("Segoe UI", 9),
-            bg=BG_INPUT, fg=TEXT_MUTED, relief="flat", cursor="hand2",
-            padx=12, pady=5, command=self.win.destroy,
-        )
-        btn_cancel.pack(side="right", padx=(0, 10))
+        btn_save = QPushButton("💾 Save All Changes")
+        btn_save.setObjectName("PrimaryBtn")
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.clicked.connect(self._save_settings)
+        bottom_layout.addWidget(btn_save)
 
-    def _build_general_tab(self, parent):
+        main_layout.addLayout(bottom_layout)
+
+    def _build_general_tab(self):
+        layout = QVBoxLayout(self.tab_general)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
+
         # Application ID
-        tk.Label(parent, text="Discord Application ID:", font=("Segoe UI", 9, "bold"), fg=TEXT_PRIMARY, bg=BG_DARK).pack(anchor="w")
-        self.var_appid = tk.StringVar(value=self.config.get("application_id", ""))
-        e_appid = tk.Entry(parent, textvariable=self.var_appid, font=("Segoe UI", 10), bg=BG_INPUT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat")
-        e_appid.pack(fill="x", pady=(4, 16), ipady=4)
+        lbl_app = QLabel("Discord Application ID:")
+        lbl_app.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        layout.addWidget(lbl_app)
 
-        # Toggles
-        self.var_autoclose = tk.BooleanVar(value=self.config.get("auto_close_with_discord", True))
-        cb_close = tk.Checkbutton(
-            parent, text="Close AutoRPC automatically when Discord exits",
-            variable=self.var_autoclose, font=("Segoe UI", 9),
-            fg=TEXT_PRIMARY, bg=BG_DARK, selectcolor=BG_INPUT, activebackground=BG_DARK, activeforeground=TEXT_PRIMARY,
-        )
-        cb_close.pack(anchor="w", pady=4)
+        self.input_app_id = QLineEdit(self.config.get("application_id", ""))
+        self.input_app_id.setFixedHeight(34)
+        layout.addWidget(self.input_app_id)
 
-        self.var_autostart = tk.BooleanVar(value=is_autostart_enabled())
-        cb_start = tk.Checkbutton(
-            parent, text="Start Discord AutoRPC automatically on Windows login",
-            variable=self.var_autostart, font=("Segoe UI", 9),
-            fg=TEXT_PRIMARY, bg=BG_DARK, selectcolor=BG_INPUT, activebackground=BG_DARK, activeforeground=TEXT_PRIMARY,
-        )
-        cb_start.pack(anchor="w", pady=4)
+        # Checkboxes
+        self.cb_autoclose = QCheckBox("Close Discord AutoRPC automatically when Discord exits")
+        self.cb_autoclose.setChecked(self.config.get("auto_close_with_discord", True))
+        layout.addWidget(self.cb_autoclose)
 
-        # Timers
-        time_frame = tk.Frame(parent, bg=BG_DARK, pady=16)
-        time_frame.pack(fill="x")
+        self.cb_autostart = QCheckBox("Launch Discord AutoRPC automatically on Windows login")
+        self.cb_autostart.setChecked(is_autostart_enabled())
+        layout.addWidget(self.cb_autostart)
 
-        tk.Label(time_frame, text="App switch debounce (seconds):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg=BG_DARK).grid(row=0, column=0, sticky="w", pady=4)
-        self.var_debounce = tk.StringVar(value=str(self.config.get("debounce_seconds", 10)))
-        tk.Entry(time_frame, textvariable=self.var_debounce, width=8, bg=BG_INPUT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat").grid(row=0, column=1, sticky="w", padx=8)
+        self.cb_private = QCheckBox("Mask / suppress presence in Incognito & Private browser windows")
+        self.cb_private.setChecked(self.config.get("mask_private_browsing", True))
+        layout.addWidget(self.cb_private)
 
-        tk.Label(time_frame, text="Idle timeout (seconds):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg=BG_DARK).grid(row=1, column=0, sticky="w", pady=4)
-        self.var_idle = tk.StringVar(value=str(self.config.get("idle_timeout_seconds", 60)))
-        tk.Entry(time_frame, textvariable=self.var_idle, width=8, bg=BG_INPUT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat").grid(row=1, column=1, sticky="w", padx=8)
+        # Timing Spinners
+        time_frame = QFrame()
+        time_frame.setStyleSheet("background-color: #2B2D31; border-radius: 6px; padding: 10px;")
+        t_layout = QVBoxLayout(time_frame)
 
-    def _build_taglines_tab(self, parent):
-        tk.Label(parent, text="Contextual taglines shown on Discord's second line:", font=("Segoe UI", 9), fg=TEXT_MUTED, bg=BG_DARK).pack(anchor="w", pady=(0, 8))
+        h1 = QHBoxLayout()
+        h1.addWidget(QLabel("App switch debounce delay (seconds):"))
+        self.spin_debounce = QSpinBox()
+        self.spin_debounce.setRange(2, 60)
+        self.spin_debounce.setValue(int(self.config.get("debounce_seconds", 10)))
+        h1.addWidget(self.spin_debounce)
+        t_layout.addLayout(h1)
 
-        # Listbox for taglines
-        list_frame = tk.Frame(parent, bg=BG_DARK)
-        list_frame.pack(fill="both", expand=True)
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("Idle timeout before clearing presence (seconds):"))
+        self.spin_idle = QSpinBox()
+        self.spin_idle.setRange(10, 600)
+        self.spin_idle.setValue(int(self.config.get("idle_timeout_seconds", 60)))
+        h2.addWidget(self.spin_idle)
+        t_layout.addLayout(h2)
 
-        self.taglines_box = tk.Listbox(list_frame, bg=BG_INPUT, fg=TEXT_PRIMARY, selectbackground=ACCENT_BLURPLE, relief="flat", font=("Segoe UI", 9))
-        self.taglines_box.pack(side="left", fill="both", expand=True)
+        layout.addWidget(time_frame)
+        layout.addStretch()
 
-        scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=self.taglines_box.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.taglines_box.config(yscrollcommand=scrollbar.set)
+    def _build_taglines_tab(self):
+        layout = QVBoxLayout(self.tab_taglines)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
-        self.current_taglines: dict = dict(self.config.get("taglines", {}))
-        self._refresh_taglines_list()
+        desc = QLabel("Contextual taglines appear on the 2nd line of your Discord profile:")
+        desc.setStyleSheet("color: #949BA4;")
+        layout.addWidget(desc)
+
+        # Table
+        self.tagline_table = QTableWidget(0, 2)
+        self.tagline_table.setHorizontalHeaderLabels(["Executable", "Tagline"])
+        self.tagline_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.tagline_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.tagline_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        layout.addWidget(self.tagline_table)
+
+        self.current_taglines = dict(self.config.get("taglines", {}))
+        self._populate_tagline_table()
 
         # Add / Edit row
-        edit_frame = tk.Frame(parent, bg=BG_DARK, pady=8)
-        edit_frame.pack(fill="x")
+        edit_layout = QHBoxLayout()
+        self.input_tag_exe = QLineEdit()
+        self.input_tag_exe.setPlaceholderText("e.g. notion.exe")
+        self.input_tag_exe.setFixedWidth(160)
+        edit_layout.addWidget(self.input_tag_exe)
 
-        tk.Label(edit_frame, text="Executable (e.g. notion.exe):", font=("Segoe UI", 8), fg=TEXT_MUTED, bg=BG_DARK).grid(row=0, column=0, sticky="w")
-        tk.Label(edit_frame, text="Tagline:", font=("Segoe UI", 8), fg=TEXT_MUTED, bg=BG_DARK).grid(row=0, column=1, sticky="w", padx=6)
+        self.input_tag_text = QLineEdit()
+        self.input_tag_text.setPlaceholderText("e.g. Working on a document")
+        edit_layout.addWidget(self.input_tag_text)
 
-        self.entry_exe = tk.Entry(edit_frame, width=22, bg=BG_INPUT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat")
-        self.entry_exe.grid(row=1, column=0, sticky="w")
+        btn_add = QPushButton("Add / Update")
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.clicked.connect(self._add_or_update_tagline)
+        edit_layout.addWidget(btn_add)
 
-        self.entry_tag = tk.Entry(edit_frame, width=30, bg=BG_INPUT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat")
-        self.entry_tag.grid(row=1, column=1, sticky="w", padx=6)
+        btn_del = QPushButton("Delete")
+        btn_del.setObjectName("DangerBtn")
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_del.clicked.connect(self._delete_tagline)
+        edit_layout.addWidget(btn_del)
 
-        btn_add = tk.Button(edit_frame, text="Add / Update", bg=BG_PANEL, fg=TEXT_PRIMARY, relief="flat", cursor="hand2", padx=8, command=self._add_tagline)
-        btn_add.grid(row=1, column=2, padx=4)
+        layout.addLayout(edit_layout)
 
-        btn_del = tk.Button(edit_frame, text="Delete", bg=BG_PANEL, fg=ACCENT_RED, relief="flat", cursor="hand2", padx=8, command=self._del_tagline)
-        btn_del.grid(row=1, column=3)
+    def _populate_tagline_table(self):
+        self.tagline_table.setRowCount(0)
+        for row, (exe, tag) in enumerate(sorted(self.current_taglines.items())):
+            self.tagline_table.insertRow(row)
+            self.tagline_table.setItem(row, 0, QTableWidgetItem(exe))
+            self.tagline_table.setItem(row, 1, QTableWidgetItem(tag))
 
-    def _refresh_taglines_list(self):
-        self.taglines_box.delete(0, tk.END)
-        for exe, tag in sorted(self.current_taglines.items()):
-            self.taglines_box.insert(tk.END, f"{exe}  →  \"{tag}\"")
-
-    def _add_tagline(self):
-        exe = self.entry_exe.get().strip().lower()
-        tag = self.entry_tag.get().strip()
+    def _add_or_update_tagline(self):
+        exe = self.input_tag_exe.text().strip().lower()
+        tag = self.input_tag_text.text().strip()
         if exe and tag:
             if not exe.endswith(".exe"):
                 exe += ".exe"
             self.current_taglines[exe] = tag
-            self._refresh_taglines_list()
-            self.entry_exe.delete(0, tk.END)
-            self.entry_tag.delete(0, tk.END)
+            self._populate_tagline_table()
+            self.input_tag_exe.clear()
+            self.input_tag_text.clear()
 
-    def _del_tagline(self):
-        sel = self.taglines_box.curselection()
-        if sel:
-            item = self.taglines_box.get(sel[0])
-            exe = item.split("  →  ")[0].strip()
-            self.current_taglines.pop(exe, None)
-            self._refresh_taglines_list()
+    def _delete_tagline(self):
+        selected = self.tagline_table.currentRow()
+        if selected >= 0:
+            exe_item = self.tagline_table.item(selected, 0)
+            if exe_item:
+                self.current_taglines.pop(exe_item.text(), None)
+                self._populate_tagline_table()
 
-    def _build_ignored_tab(self, parent):
-        tk.Label(parent, text="Applications silently ignored (never tracked):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg=BG_DARK).pack(anchor="w", pady=(0, 8))
+    def _build_ignored_tab(self):
+        layout = QVBoxLayout(self.tab_ignored)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
-        list_frame = tk.Frame(parent, bg=BG_DARK)
-        list_frame.pack(fill="both", expand=True)
+        desc = QLabel("Applications that will be silently ignored (never shown on Discord):")
+        desc.setStyleSheet("color: #949BA4;")
+        layout.addWidget(desc)
 
-        self.ignored_box = tk.Listbox(list_frame, bg=BG_INPUT, fg=TEXT_PRIMARY, selectbackground=ACCENT_BLURPLE, relief="flat", font=("Segoe UI", 9))
-        self.ignored_box.pack(side="left", fill="both", expand=True)
+        self.ignored_list = QListWidget()
+        layout.addWidget(self.ignored_list)
 
-        scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=self.ignored_box.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.ignored_box.config(yscrollcommand=scrollbar.set)
+        self.current_ignored = list(self.config.get("ignored_exes", []))
+        self._populate_ignored_list()
 
-        self.current_ignored: list = list(self.config.get("ignored_exes", []))
-        self._refresh_ignored_list()
+        edit_layout = QHBoxLayout()
+        self.input_ignore_exe = QLineEdit()
+        self.input_ignore_exe.setPlaceholderText("Executable name (e.g. secret_app.exe)")
+        edit_layout.addWidget(self.input_ignore_exe)
 
-        edit_frame = tk.Frame(parent, bg=BG_DARK, pady=8)
-        edit_frame.pack(fill="x")
+        btn_add = QPushButton("Add to Ignore List")
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.clicked.connect(self._add_ignore)
+        edit_layout.addWidget(btn_add)
 
-        self.entry_ignore_exe = tk.Entry(edit_frame, width=28, bg=BG_INPUT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat")
-        self.entry_ignore_exe.pack(side="left", padx=(0, 6), ipady=3)
+        btn_del = QPushButton("Remove")
+        btn_del.setObjectName("DangerBtn")
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_del.clicked.connect(self._remove_ignore)
+        edit_layout.addWidget(btn_del)
 
-        btn_add = tk.Button(edit_frame, text="Add to Ignore List", bg=BG_PANEL, fg=TEXT_PRIMARY, relief="flat", cursor="hand2", padx=8, command=self._add_ignore)
-        btn_add.pack(side="left", padx=4)
+        layout.addLayout(edit_layout)
 
-        btn_del = tk.Button(edit_frame, text="Remove", bg=BG_PANEL, fg=ACCENT_RED, relief="flat", cursor="hand2", padx=8, command=self._del_ignore)
-        btn_del.pack(side="left")
-
-    def _refresh_ignored_list(self):
-        self.ignored_box.delete(0, tk.END)
+    def _populate_ignored_list(self):
+        self.ignored_list.clear()
         for exe in sorted(self.current_ignored):
-            self.ignored_box.insert(tk.END, exe)
+            self.ignored_list.addItem(exe)
 
     def _add_ignore(self):
-        exe = self.entry_ignore_exe.get().strip().lower()
+        exe = self.input_ignore_exe.text().strip().lower()
         if exe:
             if not exe.endswith(".exe"):
                 exe += ".exe"
             if exe not in self.current_ignored:
                 self.current_ignored.append(exe)
-                self._refresh_ignored_list()
-                self.entry_ignore_exe.delete(0, tk.END)
+                self._populate_ignored_list()
+                self.input_ignore_exe.clear()
 
-    def _del_ignore(self):
-        sel = self.ignored_box.curselection()
-        if sel:
-            exe = self.ignored_box.get(sel[0])
-            if exe in self.current_ignored:
-                self.current_ignored.remove(exe)
-                self._refresh_ignored_list()
+    def _remove_ignore(self):
+        selected = self.ignored_list.currentRow()
+        if selected >= 0:
+            item = self.ignored_list.item(selected)
+            if item and item.text() in self.current_ignored:
+                self.current_ignored.remove(item.text())
+                self._populate_ignored_list()
 
-    def _save_all(self):
-        # Validate App ID
-        app_id = self.var_appid.get().strip()
+    def _build_terminal_tab(self):
+        layout = QVBoxLayout(self.tab_terminal)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Toolbar
+        tb_layout = QHBoxLayout()
+        lbl_info = QLabel("Real-Time Process & Detection Logs:")
+        lbl_info.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        tb_layout.addWidget(lbl_info)
+
+        tb_layout.addStretch()
+
+        self.cb_autoscroll = QCheckBox("Auto-scroll")
+        self.cb_autoscroll.setChecked(True)
+        tb_layout.addWidget(self.cb_autoscroll)
+
+        btn_copy = QPushButton("📋 Copy Logs")
+        btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_copy.clicked.connect(self._copy_logs)
+        tb_layout.addWidget(btn_copy)
+
+        btn_save_log = QPushButton("💾 Export Log File...")
+        btn_save_log.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save_log.clicked.connect(self._export_log_file)
+        tb_layout.addWidget(btn_save_log)
+
+        btn_clear = QPushButton("🧹 Clear")
+        btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_clear.clicked.connect(lambda: self.console.clear())
+        tb_layout.addWidget(btn_clear)
+
+        btn_cache = QPushButton("🔄 Reset Icon Cache")
+        btn_cache.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cache.clicked.connect(self._reset_icon_cache)
+        tb_layout.addWidget(btn_cache)
+
+        layout.addLayout(tb_layout)
+
+        # Live Console Display
+        self.console = QPlainTextEdit()
+        self.console.setObjectName("TerminalConsole")
+        self.console.setReadOnly(True)
+        layout.addWidget(self.console)
+
+    def _load_existing_logs(self):
+        if LOG_PATH.exists():
+            try:
+                with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                    # Show last 200 lines initially
+                    tail = "".join(lines[-200:])
+                    self.console.setPlainText(tail)
+                    self.console.moveCursor(QTextCursor.MoveOperation.End)
+            except Exception:
+                pass
+
+    def _append_log(self, text: str):
+        self.console.appendPlainText(text)
+        if self.cb_autoscroll.isChecked():
+            self.console.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _copy_logs(self):
+        text = self.console.toPlainText()
+        if text:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(text)
+            QMessageBox.information(self, "Copied", "Terminal logs copied to clipboard!")
+
+    def _export_log_file(self):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Log File", "autorpc_logs.txt", "Text Files (*.txt);;All Files (*)"
+        )
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(self.console.toPlainText())
+                QMessageBox.information(self, "Saved", f"Log successfully saved to {file_path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", f"Failed to save log file: {exc}")
+
+    def _reset_icon_cache(self):
+        count = clear_icon_cache()
+        QMessageBox.information(
+            self,
+            "Icon Cache Reset",
+            f"Successfully cleared {count} cached icons.\nNext app detections will fetch/upload fresh icons.",
+        )
+
+    def _save_settings(self):
+        app_id = self.input_app_id.text().strip()
         valid, err = validate_app_id(app_id)
         if not valid:
-            messagebox.showerror("Invalid Application ID", err)
+            QMessageBox.critical(self, "Invalid Application ID", err)
             return
 
         self.config["application_id"] = app_id
-        self.config["auto_close_with_discord"] = self.var_autoclose.get()
+        self.config["auto_close_with_discord"] = self.cb_autoclose.isChecked()
+        self.config["mask_private_browsing"] = self.cb_private.isChecked()
+        self.config["debounce_seconds"] = self.spin_debounce.value()
+        self.config["idle_timeout_seconds"] = self.spin_idle.value()
         self.config["taglines"] = self.current_taglines
         self.config["ignored_exes"] = self.current_ignored
 
-        try:
-            self.config["debounce_seconds"] = int(self.var_debounce.get())
-            self.config["idle_timeout_seconds"] = int(self.var_idle.get())
-        except ValueError:
-            pass
-
-        # Windows Startup toggle
-        set_autostart_enabled(self.var_autostart.get())
-
+        set_autostart_enabled(self.cb_autostart.isChecked())
         save_config(self.config)
+
         if self.on_saved:
             self.on_saved(self.config)
 
-        messagebox.showinfo("Saved", "Settings saved successfully!")
-        self.win.destroy()
+        QMessageBox.information(self, "Saved", "Settings saved successfully!")
+        self.close()
 
-    def run(self):
-        self.win.mainloop()
+
+# ---------------------------------------------------------------------------
+# Public Functions to Invoke from main.py
+# ---------------------------------------------------------------------------
+
+_CURRENT_SETTINGS_WINDOW = None
 
 
 def open_settings_gui(on_saved: Optional[Callable[[dict], None]] = None):
-    """Launch Settings GUI in a standalone or main thread."""
-    win = SettingsWindow(on_saved=on_saved)
-    win.run()
+    """Launch the modern Qt Settings window."""
+    global _CURRENT_SETTINGS_WINDOW
+    app = _ensure_qapp()
+
+    if _CURRENT_SETTINGS_WINDOW is None or not _CURRENT_SETTINGS_WINDOW.isVisible():
+        _CURRENT_SETTINGS_WINDOW = SettingsWindow(on_saved=on_saved)
+        _CURRENT_SETTINGS_WINDOW.show()
+    else:
+        _CURRENT_SETTINGS_WINDOW.raise_()
+        _CURRENT_SETTINGS_WINDOW.activateWindow()
+
+    # If this is run in a separate thread, start the event loop if not running
+    if not app.property("_running_loop"):
+        app.setProperty("_running_loop", True)
+        app.exec()
+        app.setProperty("_running_loop", False)
+
+
+def run_onboarding_wizard() -> Optional[dict]:
+    """Launch the first-run onboarding dialog modally and return updated config."""
+    app = _ensure_qapp()
+    wizard = OnboardingWizardDialog()
+    if wizard.exec() == QDialog.DialogCode.Accepted:
+        return wizard.result_config
+    return None

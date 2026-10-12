@@ -49,6 +49,15 @@ def _save_cache(cache: dict[str, str]) -> None:
         json.dump(cache, f, indent=2)
 
 
+def clear_icon_cache() -> int:
+    """Clear icon_cache.json, returning the number of cleared entries."""
+    cache = _load_cache()
+    count = len(cache)
+    _save_cache({})
+    logger.info(f"Cleared {count} entries from icon cache.")
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Icon extraction (Windows Shell API → PIL Image)
 # ---------------------------------------------------------------------------
@@ -201,7 +210,7 @@ def _upload_catbox(png_bytes: bytes, filename: str = "icon.png") -> str | None:
             "https://catbox.moe/user/api.php",
             data={"reqtype": "fileupload"},
             files={"fileToUpload": (filename, png_bytes, "image/png")},
-            timeout=30,
+            timeout=20,
         )
         resp.raise_for_status()
         url = resp.text.strip()
@@ -210,20 +219,60 @@ def _upload_catbox(png_bytes: bytes, filename: str = "icon.png") -> str | None:
         logger.warning(f"Catbox returned unexpected response: {url!r}")
         return None
     except Exception as exc:
-        logger.error(f"Catbox upload failed: {exc}")
+        logger.debug(f"Catbox upload failed: {exc}")
         return None
 
 
-# Registry of upload hosts — easy to extend
+def _upload_freeimage(png_bytes: bytes, filename: str = "icon.png") -> str | None:
+    """Upload a PNG to freeimage.host and return the direct Cloudflare CDN URL (iili.io)."""
+    try:
+        resp = requests.post(
+            "https://freeimage.host/api/1/upload",
+            data={
+                "key": "6d207e02198a847aa98d0a2a901485a5",
+                "action": "upload",
+                "format": "json",
+            },
+            files={"source": (filename, png_bytes, "image/png")},
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            url = data.get("image", {}).get("url")
+            if url and url.startswith("https://"):
+                return url
+        logger.warning(f"FreeImage upload returned status {resp.status_code}")
+    except Exception as exc:
+        logger.debug(f"FreeImage upload failed: {exc}")
+    return None
+
+
+# Registry of upload hosts
 _UPLOAD_HOSTS = {
+    "freeimage": _upload_freeimage,
     "catbox": _upload_catbox,
 }
 
 
-def _upload_png(png_bytes: bytes, host: str = "catbox",
+def _upload_png(png_bytes: bytes, host: str = "freeimage",
                 filename: str = "icon.png") -> str | None:
-    uploader = _UPLOAD_HOSTS.get(host, _upload_catbox)
-    return uploader(png_bytes, filename)
+    """
+    Upload PNG with automatic multi-host fallback.
+    Tries primary host first; if it drops or fails, immediately falls back to backup.
+    """
+    if host == "catbox":
+        chain = [_upload_catbox, _upload_freeimage]
+    else:
+        chain = [_upload_freeimage, _upload_catbox]
+
+    for uploader in chain:
+        try:
+            url = uploader(png_bytes, filename)
+            if url:
+                return url
+        except Exception:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +324,8 @@ def _try_steamgriddb(game_name: str, api_key: str) -> str | None:
 # Hosts we trust to serve images without needing a network probe
 _TRUSTED_IMAGE_HOSTS = {
     "files.catbox.moe",
+    "iili.io",
+    "freeimage.host",
     "cdn.discordapp.com",
     "www.steamgriddb.com",
     "cdn2.steamgriddb.com",
@@ -338,7 +389,7 @@ def get_icon_url(exe_path: str, display_name: str, config: dict) -> str:
     """
     default_url: str = config.get("default_icon_url",
                                   "https://cdn.discordapp.com/embed/avatars/0.png")
-    host: str = config.get("upload_host", "catbox")
+    host: str = config.get("upload_host", "freeimage")
     sgdb_key: str = config.get("steamgriddb_api_key", "")
     overrides: dict = config.get("overrides", {})
 
