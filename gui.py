@@ -943,9 +943,9 @@ _CURRENT_SETTINGS_WINDOW = None
 
 
 def open_settings_gui(on_saved: Optional[Callable[[dict], None]] = None):
-    """Launch the modern Qt Settings window."""
+    """Launch or focus the modern Qt Settings window."""
     global _CURRENT_SETTINGS_WINDOW
-    app = _ensure_qapp()
+    _ensure_qapp()
 
     if _CURRENT_SETTINGS_WINDOW is None or not _CURRENT_SETTINGS_WINDOW.isVisible():
         _CURRENT_SETTINGS_WINDOW = SettingsWindow(on_saved=on_saved)
@@ -953,12 +953,6 @@ def open_settings_gui(on_saved: Optional[Callable[[dict], None]] = None):
     else:
         _CURRENT_SETTINGS_WINDOW.raise_()
         _CURRENT_SETTINGS_WINDOW.activateWindow()
-
-    # If this is run in a separate thread, start the event loop if not running
-    if not app.property("_running_loop"):
-        app.setProperty("_running_loop", True)
-        app.exec()
-        app.setProperty("_running_loop", False)
 
 
 def run_onboarding_wizard() -> Optional[dict]:

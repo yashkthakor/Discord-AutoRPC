@@ -15,15 +15,25 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+import io
 import webbrowser
 
 import psutil
-import pystray
 from PIL import Image, ImageDraw
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QIcon, QPixmap
+from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from config import load_config, is_configured, CONFIG_PATH
 from detector import Detector, AppInfo, load_ignore_list, save_ignore_list
-from gui import run_onboarding_wizard, open_settings_gui, open_quick_rename_gui
+from gui import (
+    run_onboarding_wizard,
+    open_settings_gui,
+    open_quick_rename_gui,
+    _ensure_qapp,
+    DISCORD_DARK_QSS,
+    ICON_PATH,
+)
 from icons import get_icon_url
 from presence import PresenceManager
 from updater import __version__, check_updates_async
@@ -100,6 +110,18 @@ def _make_tray_icon(paused: bool = False) -> Image.Image:
     return img
 
 
+def _make_qt_tray_icon(paused: bool = False) -> QIcon:
+    """Return a native QIcon for the system tray."""
+    if not paused and ICON_PATH.exists():
+        return QIcon(str(ICON_PATH))
+    img = _make_tray_icon(paused=paused)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    pix = QPixmap()
+    pix.loadFromData(buf.getvalue(), "PNG")
+    return QIcon(pix)
+
+
 # ---------------------------------------------------------------------------
 # Main loop (runs in a daemon thread)
 # ---------------------------------------------------------------------------
@@ -158,9 +180,12 @@ def _poll_loop(
                 tray = state.get("tray")
                 if tray:
                     try:
-                        tray.stop()
+                        tray.hide()
                     except Exception:
                         pass
+                app_qt = state.get("app_qt")
+                if app_qt:
+                    app_qt.quit()
                 break
             else:
                 presence.clear()
@@ -193,115 +218,147 @@ def _poll_loop(
 
 
 # ---------------------------------------------------------------------------
-# Tray menu actions
+# Native Qt System Tray & Menu
 # ---------------------------------------------------------------------------
 
-def _make_menu(state, tray, presence):
-    def toggle_pause(icon, item):
+def _create_qt_tray(state: dict, presence: PresenceManager, app: QApplication) -> QSystemTrayIcon:
+    tray = QSystemTrayIcon(_make_qt_tray_icon(), app)
+    tray.setToolTip("Discord AutoRPC")
+
+    menu = QMenu()
+    menu.setStyleSheet(DISCORD_DARK_QSS)
+
+    # 1. Update / Version Action
+    update_action = QAction(f"Discord AutoRPC v{__version__}", menu)
+    update_action.setEnabled(False)
+    def _open_update():
+        if state.get("update_url"):
+            webbrowser.open(state["update_url"])
+    update_action.triggered.connect(_open_update)
+    menu.addAction(update_action)
+
+    menu.addSeparator()
+
+    # 2. Settings Action
+    settings_action = QAction("⚙️ Settings", menu)
+    def _open_settings():
+        open_settings_gui(on_saved=lambda cfg: state.update({"_detector": None}))
+    settings_action.triggered.connect(_open_settings)
+    menu.addAction(settings_action)
+
+    menu.addSeparator()
+
+    # 3. Rename Active App Action
+    rename_action = QAction("🏷️ Rename Active App...", menu)
+    def _rename_cur():
+        cur = state.get("current_app")
+        if cur:
+            def _on_rename_saved(cfg, new_name, new_tagline):
+                state["_detector"] = None
+                cur.display_name = new_name
+                if new_tagline:
+                    cur.tagline = new_tagline
+                icon_url = get_icon_url(cur.exe_path, new_name, cfg)
+                presence.update(
+                    display_name=new_name,
+                    icon_url=icon_url,
+                    exe_path=cur.exe_path,
+                    pid=cur.pid,
+                    tagline=cur.tagline,
+                )
+            open_quick_rename_gui(
+                exe_name=cur.exe_name,
+                current_name=cur.display_name,
+                current_tagline=cur.tagline,
+                on_saved=_on_rename_saved,
+            )
+    rename_action.triggered.connect(_rename_cur)
+    menu.addAction(rename_action)
+
+    # 4. Pause / Resume Action
+    pause_action = QAction("⏸ Pause", menu)
+    def _toggle_pause():
         state["paused"] = not state["paused"]
         if state["paused"]:
             presence.clear()
-        icon.icon = _make_tray_icon(paused=state["paused"])
+            pause_action.setText("▶ Resume")
+        else:
+            pause_action.setText("⏸ Pause")
+        tray.setIcon(_make_qt_tray_icon(paused=state["paused"]))
         logger.info("Paused" if state["paused"] else "Resumed")
+    pause_action.triggered.connect(_toggle_pause)
+    menu.addAction(pause_action)
 
-    def ignore_current(icon, item):
-        app: AppInfo | None = state.get("current_app")
-        if app is None:
-            logger.info("No current app to ignore")
-            return
-        ignored = load_ignore_list()
-        exe_lower = app.exe_name.lower()
-        if exe_lower not in ignored:
-            ignored.append(exe_lower)
-            save_ignore_list(ignored)
-            logger.info(f"Added {app.exe_name} to ignore list")
-            # Force detector to re-evaluate
-            state["_detector"] = None
+    # 5. Ignore Current App Action
+    ignore_action = QAction("🚫 Ignore current app", menu)
+    def _ignore_cur():
+        cur = state.get("current_app")
+        if cur:
+            ignored = load_ignore_list()
+            exe_lower = cur.exe_name.lower()
+            if exe_lower not in ignored:
+                ignored.append(exe_lower)
+                save_ignore_list(ignored)
+                logger.info(f"Added {cur.exe_name} to ignore list")
+                state["_detector"] = None
+    ignore_action.triggered.connect(_ignore_cur)
+    menu.addAction(ignore_action)
 
-    def open_config(icon, item):
-        try:
-            os.startfile(str(CONFIG_PATH))
-        except Exception:
-            subprocess.Popen(["notepad.exe", str(CONFIG_PATH)])
+    menu.addSeparator()
 
-    def open_settings(icon, item):
-        def _launch():
-            try:
-                def _on_save(new_cfg):
-                    state["_detector"] = None
-                open_settings_gui(on_saved=_on_save)
-            except Exception as exc:
-                logger.error(f"Failed to open settings window: {exc}")
-        threading.Thread(target=_launch, daemon=True).start()
-
-    def rename_active_app(icon, item):
-        app: AppInfo | None = state.get("current_app")
-        if app is None:
-            return
-
-        def _launch():
-            try:
-                def _on_rename_saved(cfg, new_name, new_tagline):
-                    state["_detector"] = None
-                    cur = state.get("current_app")
-                    if cur:
-                        cur.display_name = new_name
-                        if new_tagline:
-                            cur.tagline = new_tagline
-                        icon_url = get_icon_url(cur.exe_path, new_name, cfg)
-                        presence.update(
-                            display_name=new_name,
-                            icon_url=icon_url,
-                            exe_path=cur.exe_path,
-                            pid=cur.pid,
-                            tagline=cur.tagline,
-                        )
-                open_quick_rename_gui(
-                    exe_name=app.exe_name,
-                    current_name=app.display_name,
-                    current_tagline=app.tagline,
-                    on_saved=_on_rename_saved,
-                )
-            except Exception as exc:
-                logger.error(f"Failed to open quick rename dialog: {exc}")
-
-        threading.Thread(target=_launch, daemon=True).start()
-
-    def open_log(icon, item):
+    # 6. Open Log Action
+    log_action = QAction("📋 Open log", menu)
+    def _open_log():
         try:
             os.startfile(str(LOG_PATH))
         except Exception:
             subprocess.Popen(["notepad.exe", str(LOG_PATH)])
+    log_action.triggered.connect(_open_log)
+    menu.addAction(log_action)
 
-    def quit_app(icon, item):
+    # 7. Quit Action
+    quit_action = QAction("❌ Quit", menu)
+    def _quit_app():
         state["quit"] = True
         presence.close()
-        icon.stop()
+        tray.hide()
         logger.info("AutoRPC quit")
+        app.quit()
+    quit_action.triggered.connect(_quit_app)
+    menu.addAction(quit_action)
 
-    return pystray.Menu(
-        pystray.MenuItem(
-            lambda item: f"⭐ Update to v{state['latest_tag']}" if state.get("update_url") else f"Discord AutoRPC v{__version__}",
-            lambda icon, item: webbrowser.open(state.get("update_url", "https://github.com/yashkthakor/Discord-AutoRPC/releases")) if state.get("update_url") else None,
-            enabled=lambda item: bool(state.get("update_url")),
-        ),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("⚙️ Settings", open_settings),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem(
-            lambda item: f"🏷️ Rename Active App ({state['current_app'].display_name})..." if state.get("current_app") else "🏷️ Rename Active App...",
-            rename_active_app,
-            enabled=lambda item: state.get("current_app") is not None,
-        ),
-        pystray.MenuItem(
-            lambda item: "▶ Resume" if state["paused"] else "⏸ Pause",
-            toggle_pause,
-        ),
-        pystray.MenuItem("🚫 Ignore current app", ignore_current),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("📋 Open log", open_log),
-        pystray.MenuItem("❌ Quit", quit_app),
-    )
+    # Dynamic menu update before showing
+    def _update_menu_state():
+        cur = state.get("current_app")
+        if cur:
+            rename_action.setText(f"🏷️ Rename Active App ({cur.display_name})...")
+            rename_action.setEnabled(True)
+            ignore_action.setText(f"🚫 Ignore {cur.exe_name}")
+            ignore_action.setEnabled(True)
+        else:
+            rename_action.setText("🏷️ Rename Active App...")
+            rename_action.setEnabled(False)
+            ignore_action.setText("🚫 Ignore current app")
+            ignore_action.setEnabled(False)
+
+        if state.get("update_url"):
+            update_action.setText(f"⭐ Update to v{state['latest_tag']}")
+            update_action.setEnabled(True)
+
+    menu.aboutToShow.connect(_update_menu_state)
+
+    # Click / Double-click on tray opens Settings
+    def _on_activated(reason):
+        if reason in (
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+            QSystemTrayIcon.ActivationReason.Trigger,
+        ):
+            open_settings_gui(on_saved=lambda cfg: state.update({"_detector": None}))
+
+    tray.activated.connect(_on_activated)
+    tray.setContextMenu(menu)
+    tray.show()
+    return tray
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +369,10 @@ def main() -> None:
     _setup_logging()
     logger.info("=" * 50)
     logger.info("Discord AutoRPC starting")
+
+    # Initialize Qt on the main thread FIRST
+    app = _ensure_qapp()
+    app.setQuitOnLastWindowClosed(False)
 
     config = load_config()
 
@@ -334,6 +395,7 @@ def main() -> None:
         "_detector": None,
         "latest_tag": None,
         "update_url": None,
+        "app_qt": app,
     }
 
     # Asynchronously check for GitHub updates
@@ -350,13 +412,12 @@ def main() -> None:
     )
     poll_thread.start()
 
-    # System tray icon (blocks on the main thread)
-    tray = pystray.Icon("AutoRPC")
-    tray.icon = _make_tray_icon()
-    tray.title = "Discord AutoRPC"
-    tray.menu = _make_menu(state, tray, presence)
+    # Native Qt System Tray Icon
+    tray = _create_qt_tray(state, presence, app)
     state["tray"] = tray
-    tray.run()
+
+    # Run Qt Event Loop on the Main Thread
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
