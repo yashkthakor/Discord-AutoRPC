@@ -48,14 +48,18 @@ from config import (
     validate_app_id,
     is_autostart_enabled,
     set_autostart_enabled,
+    get_data_dir,
     CONFIG_PATH,
 )
 from icons import clear_icon_cache
 
 logger = logging.getLogger("autorpc.gui")
 BASE_DIR = Path(__file__).resolve().parent
-LOG_PATH = BASE_DIR / "autorpc.log"
-ICON_PATH = BASE_DIR / "assets" / "icon.png"
+LOG_PATH = get_data_dir() / "autorpc.log"
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    ICON_PATH = Path(sys._MEIPASS) / "assets" / "icon.png"
+else:
+    ICON_PATH = BASE_DIR / "assets" / "icon.png"
 
 # ---------------------------------------------------------------------------
 # Modern Discord Dark Theme QSS
@@ -262,7 +266,7 @@ class OnboardingWizardDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Discord AutoRPC — First-Run Setup")
-        self.setFixedSize(540, 460)
+        self.setFixedSize(540, 510)
         self.setStyleSheet(DISCORD_DARK_QSS)
         if ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(ICON_PATH)))
@@ -328,6 +332,15 @@ class OnboardingWizardDialog(QDialog):
         self.err_lbl.setStyleSheet("color: #F23F43; font-size: 12px;")
         layout.addWidget(self.err_lbl)
 
+        # Options
+        self.cb_autostart = QCheckBox("Launch Discord AutoRPC automatically on Windows login (Recommended)")
+        self.cb_autostart.setChecked(True)
+        layout.addWidget(self.cb_autostart)
+
+        self.cb_autoclose = QCheckBox("Auto-sync with Discord (hide when closed, run when opened)")
+        self.cb_autoclose.setChecked(True)
+        layout.addWidget(self.cb_autoclose)
+
         layout.addStretch()
 
         # Bottom Action Bar
@@ -371,7 +384,10 @@ class OnboardingWizardDialog(QDialog):
 
         cfg = load_config()
         cfg["application_id"] = val
+        cfg["auto_close_with_discord"] = self.cb_autoclose.isChecked()
         save_config(cfg)
+        if self.cb_autostart.isChecked():
+            set_autostart_enabled(True)
         self.result_config = cfg
         self.accept()
 

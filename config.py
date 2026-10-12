@@ -5,13 +5,46 @@ config.py — Configuration loading, saving, validation, and defaults.
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Tuple
 
 logger = logging.getLogger("autorpc.config")
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
+
+def get_data_dir() -> Path:
+    """
+    Return the persistent directory for user configuration, logs, and caches.
+    In frozen (.exe) mode:
+      - If portable.txt or config.json is in the exe directory, use that (portable mode).
+      - Otherwise, use %APPDATA%/DiscordAutoRPC.
+    In development mode:
+      - Use the project root directory.
+    """
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        if (exe_dir / "portable.txt").exists() or (exe_dir / "config.json").exists():
+            return exe_dir
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            target = Path(appdata) / "DiscordAutoRPC"
+            target.mkdir(parents=True, exist_ok=True)
+            if not (target / "config.json").exists():
+                for candidate in [exe_dir / "config.json", Path.cwd() / "config.json"]:
+                    if candidate.exists():
+                        try:
+                            import shutil
+                            shutil.copy2(candidate, target / "config.json")
+                            break
+                        except Exception:
+                            pass
+            return target
+        return exe_dir
+    return BASE_DIR
+
+DATA_DIR = get_data_dir()
+CONFIG_PATH = DATA_DIR / "config.json"
 STARTUP_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 SHORTCUT_NAME = "DiscordAutoRPC.lnk"
 
@@ -128,13 +161,22 @@ def set_autostart_enabled(enabled: bool) -> bool:
 
         # Create shortcut using Windows WScript.Shell
         import subprocess
-        main_py = BASE_DIR / "main.py"
+        if getattr(sys, "frozen", False):
+            target_path = str(Path(sys.executable).resolve())
+            work_dir = str(Path(sys.executable).resolve().parent)
+            arguments = "--startup"
+        else:
+            main_py = BASE_DIR / "main.py"
+            target_path = "pythonw.exe"
+            arguments = f'"{main_py}" --startup'
+            work_dir = str(BASE_DIR)
+
         powershell_cmd = (
             f"$ws = New-Object -ComObject WScript.Shell; "
             f"$s = $ws.CreateShortcut('{shortcut_path}'); "
-            f"$s.TargetPath = 'pythonw.exe'; "
-            f"$s.Arguments = '\"{main_py}\"'; "
-            f"$s.WorkingDirectory = '{BASE_DIR}'; "
+            f"$s.TargetPath = '{target_path}'; "
+            f"$s.Arguments = '{arguments}'; "
+            f"$s.WorkingDirectory = '{work_dir}'; "
             f"$s.WindowStyle = 7; "
             f"$s.Save()"
         )

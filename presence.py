@@ -57,10 +57,10 @@ class PresenceManager:
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self) -> bool:
+    def connect(self, force: bool = False) -> bool:
         """Try to connect to Discord. Returns True on success."""
         now = time.time()
-        if now - self._last_reconnect_attempt < self.RECONNECT_INTERVAL:
+        if not force and (now - self._last_reconnect_attempt < self.RECONNECT_INTERVAL):
             return False
         self._last_reconnect_attempt = now
 
@@ -187,4 +187,6 @@ class PresenceManager:
         except Exception:
             pass
         self._connected = False
+        self._last_reconnect_attempt = 0.0
+        self._last_sent_key = None
         logger.info("RPC connection closed")

@@ -294,7 +294,8 @@ def resolve_tagline(app: AppInfo, config: dict) -> str:
 # Ignore / whitelist helpers
 # ---------------------------------------------------------------------------
 
-_BASE_DIR = Path(__file__).resolve().parent
+from config import get_data_dir
+_BASE_DIR = get_data_dir()
 
 
 def _load_json_list(path: Path) -> list[str]:

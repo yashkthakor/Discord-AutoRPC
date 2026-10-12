@@ -19,12 +19,15 @@ import io
 import webbrowser
 
 import psutil
+import win32api
+import win32event
+import winerror
 from PIL import Image, ImageDraw
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from config import load_config, is_configured, CONFIG_PATH
+from config import load_config, is_configured, CONFIG_PATH, get_data_dir
 from detector import Detector, AppInfo, load_ignore_list, save_ignore_list
 from gui import (
     run_onboarding_wizard,
@@ -38,12 +41,12 @@ from icons import get_icon_url
 from presence import PresenceManager
 from updater import __version__, check_updates_async
 
-# `---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
-LOG_PATH = BASE_DIR / "autorpc.log"
+CONFIG_PATH = get_data_dir() / "config.json"
+LOG_PATH = get_data_dir() / "autorpc.log"
 
 
 # ---------------------------------------------------------------------------
@@ -155,12 +158,40 @@ def _is_discord_running() -> bool:
     return False
 
 
+class TrayBridge(QObject):
+    set_visible_signal = pyqtSignal(bool)
+    show_settings_signal = pyqtSignal()
+    set_tooltip_signal = pyqtSignal(str)
+
+    def __init__(self, tray: QSystemTrayIcon):
+        super().__init__()
+        self.tray = tray
+        self.set_visible_signal.connect(self._on_set_visible)
+        self.show_settings_signal.connect(self._on_show_settings)
+        self.set_tooltip_signal.connect(self._on_set_tooltip)
+
+    def _on_set_visible(self, visible: bool):
+        if visible:
+            self.tray.show()
+        else:
+            self.tray.hide()
+
+    def _on_set_tooltip(self, tip: str):
+        self.tray.setToolTip(tip)
+
+    def _on_show_settings(self):
+        open_settings_gui()
+
+
 def _poll_loop(
     state: dict,          # shared mutable state
     presence: PresenceManager,
+    bridge: TrayBridge,
+    wakeup_event=None,
 ) -> None:
-    """Background polling loop."""
+    """Background polling loop with auto Discord lifecycle sync."""
     reloader = JsonReloader()
+    was_discord_active = None
 
     while not state["quit"]:
         if state["paused"]:
@@ -169,28 +200,58 @@ def _poll_loop(
 
         config = reloader.get()
         poll_interval = config.get("poll_interval", 5)
+        auto_close = config.get("auto_close_with_discord", True)
 
-        # Discord process lifecycle check
         discord_running = _is_discord_running()
+
         if not discord_running:
-            if config.get("auto_close_with_discord", False):
-                logger.info("Discord is closed and auto_close_with_discord is enabled. Exiting AutoRPC...")
-                state["quit"] = True
-                presence.close()
-                tray = state.get("tray")
-                if tray:
-                    try:
-                        tray.hide()
-                    except Exception:
-                        pass
-                app_qt = state.get("app_qt")
-                if app_qt:
-                    app_qt.quit()
-                break
+            if auto_close:
+                # If Discord was previously active and just closed, or if started dormant on system startup
+                if was_discord_active is True or (was_discord_active is None and state.get("is_startup", False)):
+                    logger.info("Discord is closed. AutoRPC entering dormant standby mode (hidden tray)...")
+                    presence.close()
+                    bridge.set_visible_signal.emit(False)
+                    state["dormant"] = True
+                    was_discord_active = False
+
+                elif was_discord_active is None and not state.get("is_startup", False):
+                    bridge.set_tooltip_signal.emit("Discord AutoRPC — Waiting for Discord...")
+                    was_discord_active = False
+
+                # Dormant sleep loop: wait quietly until Discord launches or app quits
+                while not state["quit"]:
+                    time.sleep(2)
+                    if wakeup_event and win32event.WaitForSingleObject(wakeup_event, 0) == win32event.WAIT_OBJECT_0:
+                        bridge.set_visible_signal.emit(True)
+                        bridge.show_settings_signal.emit()
+
+                    if _is_discord_running():
+                        logger.info("Discord detected! Restoring system tray icon and reconnecting Rich Presence...")
+                        bridge.set_tooltip_signal.emit("Discord AutoRPC")
+                        bridge.set_visible_signal.emit(True)
+                        state["dormant"] = False
+                        was_discord_active = True
+                        presence.connect(force=True)
+                        break
+                continue
             else:
                 presence.clear()
+                bridge.set_tooltip_signal.emit("Discord AutoRPC — Discord not running")
                 time.sleep(poll_interval)
                 continue
+
+        # If discord is running and we just saw it start
+        if was_discord_active is not True:
+            was_discord_active = True
+            bridge.set_tooltip_signal.emit("Discord AutoRPC")
+            bridge.set_visible_signal.emit(True)
+            state["dormant"] = False
+            presence.connect(force=True)
+
+        # Check for wakeup event from second instance
+        if wakeup_event and win32event.WaitForSingleObject(wakeup_event, 0) == win32event.WAIT_OBJECT_0:
+            bridge.set_visible_signal.emit(True)
+            bridge.show_settings_signal.emit()
 
         # Lazy-create or re-create detector when config changes
         if state.get("_detector") is None:
@@ -221,9 +282,10 @@ def _poll_loop(
 # Native Qt System Tray & Menu
 # ---------------------------------------------------------------------------
 
-def _create_qt_tray(state: dict, presence: PresenceManager, app: QApplication) -> QSystemTrayIcon:
+def _create_qt_tray(state: dict, presence: PresenceManager, app: QApplication) -> tuple[QSystemTrayIcon, TrayBridge]:
     tray = QSystemTrayIcon(_make_qt_tray_icon(), app)
     tray.setToolTip("Discord AutoRPC")
+    bridge = TrayBridge(tray)
 
     menu = QMenu()
     menu.setStyleSheet(DISCORD_DARK_QSS)
@@ -357,8 +419,9 @@ def _create_qt_tray(state: dict, presence: PresenceManager, app: QApplication) -
 
     tray.activated.connect(_on_activated)
     tray.setContextMenu(menu)
-    tray.show()
-    return tray
+    if not state.get("dormant", False):
+        tray.show()
+    return tray, bridge
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +432,24 @@ def main() -> None:
     _setup_logging()
     logger.info("=" * 50)
     logger.info("Discord AutoRPC starting")
+
+    # Single-instance mutex check
+    MUTEX_NAME = "DiscordAutoRPC_SingleInstance_Mutex"
+    EVENT_NAME = "DiscordAutoRPC_Wakeup_Event"
+
+    h_mutex = win32event.CreateMutex(None, False, MUTEX_NAME)
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        logger.info("Another instance of Discord AutoRPC is already running. Signaling wake up...")
+        try:
+            h_event = win32event.OpenEvent(win32event.EVENT_MODIFY_STATE, False, EVENT_NAME)
+            if h_event:
+                win32event.SetEvent(h_event)
+                win32api.CloseHandle(h_event)
+        except Exception:
+            pass
+        sys.exit(0)
+
+    wakeup_event = win32event.CreateEvent(None, False, False, EVENT_NAME)
 
     # Initialize Qt on the main thread FIRST
     app = _ensure_qapp()
@@ -387,6 +468,11 @@ def main() -> None:
     app_id = config.get("application_id", "")
     presence = PresenceManager(app_id)
 
+    is_startup = "--startup" in sys.argv
+    discord_running = _is_discord_running()
+    auto_close = config.get("auto_close_with_discord", True)
+    start_dormant = is_startup and not discord_running and auto_close
+
     # Shared state between tray and background thread
     state: dict = {
         "quit": False,
@@ -396,6 +482,8 @@ def main() -> None:
         "latest_tag": None,
         "update_url": None,
         "app_qt": app,
+        "dormant": start_dormant,
+        "is_startup": is_startup,
     }
 
     # Asynchronously check for GitHub updates
@@ -406,15 +494,16 @@ def main() -> None:
 
     check_updates_async(_on_update_found)
 
+    # Native Qt System Tray Icon & Bridge
+    tray, bridge = _create_qt_tray(state, presence, app)
+    state["tray"] = tray
+    state["bridge"] = bridge
+
     # Start the polling thread
     poll_thread = threading.Thread(
-        target=_poll_loop, args=(state, presence), daemon=True
+        target=_poll_loop, args=(state, presence, bridge, wakeup_event), daemon=True
     )
     poll_thread.start()
-
-    # Native Qt System Tray Icon
-    tray = _create_qt_tray(state, presence, app)
-    state["tray"] = tray
 
     # Run Qt Event Loop on the Main Thread
     sys.exit(app.exec())

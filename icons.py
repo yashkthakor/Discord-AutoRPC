@@ -26,10 +26,11 @@ import win32gui
 import win32ui
 from PIL import Image
 
+from config import get_data_dir
+
 logger = logging.getLogger("autorpc.icons")
 
-_BASE_DIR = Path(__file__).resolve().parent
-_CACHE_PATH = _BASE_DIR / "icon_cache.json"
+_CACHE_PATH = get_data_dir() / "icon_cache.json"
 
 
 # ---------------------------------------------------------------------------
