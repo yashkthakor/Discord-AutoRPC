@@ -1,7 +1,7 @@
 # STATE.md — Current Project Snapshot
 
 > **Volatile file.** Overwrite freely. It answers: *"where are we right now?"*
-> Last updated: **2026-10-18** · Updated by: **engine seam landed and verified (`T-022`, `D-057`) + the rewrite committed (`1795dce`)**
+> Last updated: **2026-10-18** · Updated by: **engine seam landed, verified and committed — `1795dce` (shell) + `2f07b9f` (seam + docs)**
 > Keep it short enough to read in 60 seconds.
 
 ---
@@ -13,10 +13,10 @@
 | Project | Discord AutoRPC |
 | Shipped version | `0.1.0-beta` (`updater.py::__version__`) — the Python/Qt build is still the shippable artifact; only additive changes this pass |
 | Desktop shell version | `0.2.0` (`desktop/package.json`, `desktop/src-tauri/Cargo.toml`, `tauri.conf.json`) |
-| Status | Python build: open beta, no test suite. **Rewrite: Phase 1 committed (`1795dce`), and the real engine is wired and verified end to end (`T-022`, `D-057`). `G2` visual evidence (`T-023`) is all that is left before the gate.** |
+| Status | Python build: open beta, no test suite. **Rewrite: committed (`1795dce`), and the real engine is wired and verified end to end (`2f07b9f`, `T-022`, `D-057`). `G2` visual evidence (`T-023`) is all that is left before the gate.** |
 | Branch | `main` |
-| HEAD | `1795dce` — feat(desktop): add the Tauri 2 + React shell (rewrite Phase 1) |
-| Working tree | the engine seam (Python + the shell's Rust) and these docs — committed in the same pass as this file |
+| HEAD | `2f07b9f` — feat(engine): drive the shell from the real Python engine (T-022) |
+| Working tree | clean; the docs landed with the seam commit |
 | Platform | Windows 10 / 11 x64 only |
 | Python | 3.11+ (CI targets 3.12) · local 3.12.10 (Microsoft Store `python.exe`, on `PATH`) |
 | Toolchain | Node 24.15.0 · npm 11.12.1 · rustc/cargo 1.96.1 · MSVC 17.14.37314.3 |
@@ -57,7 +57,7 @@ falling back to the mock.
 
 | Commit | Date | Summary |
 |---|---|---|
-| *(this commit)* | 2026-10-18 | **Engine seam (`T-022`, `D-057`).** `engine_stdio.py` + a `main.py --engine-stdio` guard above the Qt imports; `sidecar.rs` (spawn, JSON lines, built-ins cache, polite quit, EOF reaping); `engine.rs` dispatch `mock`/`python`/`auto`; `set_paused` + `reload_config` forwards through `service.rs` so the tray cannot bypass them; `ExitRequested` → `sidecar::shutdown`; `detector.is_discord_running`/`built_in_taglines`, `presence.connected`/`start_epoch`; `B-11` and `B-14` fixed in `updater.py`. Verified: a real presence on a live Discord client, a real icon upload, and a clean EOF shutdown. |
+| `2f07b9f` | 2026-10-18 | **Engine seam (`T-022`, `D-057`).** `engine_stdio.py` + a `main.py --engine-stdio` guard above the Qt imports; `sidecar.rs` (spawn, JSON lines, built-ins cache, polite quit, EOF reaping); `engine.rs` dispatch `mock`/`python`/`auto`; `set_paused` + `reload_config` forwards through `service.rs` so the tray cannot bypass them; `ExitRequested` → `sidecar::shutdown`; `detector.is_discord_running`/`built_in_taglines`, `presence.connected`/`start_epoch`; `B-11` and `B-14` fixed in `updater.py`. Verified: a real presence on a live Discord client, a real icon upload, and a clean EOF shutdown. |
 | `1795dce` | 2026-10-18 | **Rewrite Phase 1 committed** — the Tauri 2 shell + React/TS UI under `desktop/` (tray, six panes, onboarding, quick rename, design tokens, frozen IPC contract, mock engine), plus the spec and research docs. 80 files, 18.9k lines. Includes the owner-review fixes below. |
 | *(in `1795dce`)* | 2026-10-18 | **Owner-review fixes:** frameless chrome in all three windows (`D-055`, `windows.rs::strip_caption` because tao keeps `WS_CAPTION`) and scrolling panes (`D-056`, `min-height: 0` + reserved scrollbar gutter). Verified by driving the window: no caption at startup or maximized, `HTLEFT`/`HTTOP`/… hit tests intact, wheel scrolling reaches previously unreachable rows. |
 | `6f34a75` | 2026-10-12 | Persist App ID across launches; auto-sync lifecycle with Discord (dormant/hidden tray when Discord is closed). |

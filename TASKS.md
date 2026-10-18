@@ -309,4 +309,4 @@
 | `T-018` | `1795dce` | 2026-10-18 | G1 answers — Q4 "Continue without connecting" (`D-044`), Q5 Advanced visible (`D-045`). |
 | `T-019` | `1795dce` | 2026-10-18 | Unified ignore list: `config.ignored_exes` is the one store (`D-047`). |
 | `T-021` | `1795dce` | 2026-10-18 | Q1 answered — Option A, the Python sidecar over stdio (`D-043`). Q2/Q7/Q8 stayed open and live in the handoff §13. |
-| `T-022` | *(this commit)* | 2026-10-18 | Engine seam: `engine_stdio.py` + `sidecar.rs`, verified end to end on a live Discord client. Design and rationale in `D-057`; detail in the entry above. |
+| `T-022` | `2f07b9f` | 2026-10-18 | Engine seam: `engine_stdio.py` + `sidecar.rs`, verified end to end on a live Discord client. Design and rationale in `D-057`; detail in the entry above. |
