@@ -1,6 +1,8 @@
 # Icon reliability — research and proposal
 
-> **Status:** draft for owner review (2026-10-18). **No code has been changed.**
+> **Status:** accepted by the owner and implemented (2026-10-18, `bd2543e`, decision `D-058`).
+> The answers to §7 are recorded there. `S4` (trusted-host revalidation) and `S5`/`E1`
+> (packaged-app icons via the Explorer route) remain gated on measurement and the `T9` probe.
 > **Owner request:** *"when the app detects that the icon isn't visible or it's falling back to the
 > default icons, it instead tries at least 3 times to fetch the icon from the current mechanism, and
 > only after that if it fails, it reverts to the default. also implement a system in the settings of
@@ -193,27 +195,28 @@ extending it to "clear the selected app's icon" is ~30 lines (a combo built from
 |---|---|---|
 | **S1** | Observability + timer stamp: WARNING logs with stage and reason, `start_epoch` stamped at detection, atomic `_save_cache`, memoized validation verdicts (F2/F4/F6/F7). | None user-visible; the log becomes honest. |
 | **S2** | The retry ladder in `icons.py`, plus an optional `iconState` field in the `app` event so the Status pane can say *why* the default is showing. | Behaviour change for stuck apps (fewer attempts, occasional park). |
-| **S3** | Per-app clear: `icons` API → protocol pair → shell commands → Status card + Logs dialog + memo invalidation (`T-030`). | Additive changes to the frozen IPC contract (`types.ts`). |
+| **S3** | Per-app clear: `icons` API → protocol pair → shell commands → Status card + App Names section + memo invalidation (`T-030`). | Additive changes to the frozen IPC contract (`types.ts`). |
 | **S4** | Trusted-host revalidation — **only if T7 shows entries dying.** | Adds probes; gate on the measurement. |
 | **S5 (option)** | Packaged-app icons via the Explorer route (E1) — gated on the T9 probe. | New COM/GDI paths; must not slow the tick loop. |
 
-Measurement first: run the appendix queries against the existing `autorpc.log` to size classes A–E
-before S2 picks its ladder values.
+**Landed 2026-10-18 in `bd2543e`:** S1, S2 and S3. The appendix measurements below sized the failure
+classes; the ladder values are the owner's choice (§7). S4 and S5 stay gated.
 
 ---
 
-## 7. Open questions for the owner
+## 7. Owner answers (2026-10-18)
 
-1. **Qt build:** add the minimal per-app clear to `gui.py` (so today's releases get it), or
-   `desktop/` only?
-2. **Retry budget:** 3 attempts then 60 s → 5 min → 30 min as proposed — or a shorter first rung
-   (20–30 s), or no park at all ("keep retrying every tick like today")?
-3. **Where the per-app UI lives:** Status card + Logs dialog (proposed), a section in App Names,
-   or both?
-4. **Cache metadata:** keep `icon_cache.json` as `{exe: url}` (proposed), or accept a format change
-   that older builds cannot read (T5)?
-5. **Surface the failure state:** should the Status pane show `icon: default (3 attempts failed)`?
-   It needs one extra field in the `app` event.
+1. **Qt build:** `desktop/` only. The Tauri shell is the product direction; `gui.py` is maintenance
+   only (`AGENTS.md`), so no per-app UI there. It still gets the engine-side improvements because it
+   shares `icons.py`, and its global reset keeps working because `clear_icon_cache()` stayed
+   call-compatible.
+2. **Retry budget:** as proposed — 3 attempts, then the escalating park 60 s → 5 min → 30 min.
+3. **Where the per-app UI lives:** **both** — a **Refresh icon** action in the Status card *and* an
+   **Icon cache** section in App Names (not the Logs dialog this draft proposed). The Logs pane
+   keeps its existing global reset.
+4. **Cache metadata:** keep `icon_cache.json` as `{exe: url}` strings. No format change.
+5. **Surface the failure state:** yes — the `app` event carries
+   `icon: {state, attempts, retryAtMs, reason}` and the Status pane's Details card renders it.
 
 ---
 

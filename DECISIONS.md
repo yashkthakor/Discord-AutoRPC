@@ -795,3 +795,66 @@
   - Engine death is reported once, with its exit code, plus a toast — and never auto-restarted, because a silent restart loop would hide the failure that caused it.
 - **Rejected:** porting the pipeline to Rust now (that is `RUST_MIGRATION_RESEARCH.md`'s work, and it would have shipped a Windows-API rewrite in the same change as the engine seam); embedding CPython in the shell (one process and no protocol, but an engine crash would take the UI down with it); `pythonw.exe` for the sidecar (its stdout is only reliable when a pipe is attached, and stdout *is* the protocol — `python.exe` + `CREATE_NO_WINDOW` is deterministic and shows no console window); auto-restart on crash; taking the tray build's mutex; and reading the protocol with `sys.stdin` in the reader thread, which aborts CPython at shutdown with `_enter_buffered_busy` when the daemon thread still holds the buffered reader's lock — raw `os.read` holds no Python lock, so the process can exit under the thread.
 - **Evidence:** `engine_stdio.py` (new), `main.py` (the `--engine-stdio` guard, `detector.is_discord_running` replacing the local copy), `detector.py` (`is_discord_running`, `built_in_taglines`), `presence.py` (`connected`, `start_epoch`), `updater.py` (`_version_key`, `is_newer`, the `/releases` endpoint for `B-14`); `desktop/src-tauri/src/sidecar.rs` (new: discovery, spawn, protocol, built-ins cache, shutdown), `engine.rs` (driver dispatch), `commands.rs` (the `reload_config`/`set_paused` forwards, `get_built_ins` from the cache), `main.rs` (`ExitRequested` → `sidecar::shutdown`), `state.rs` (`DISCORD_CONNECTING` is now accepted from the engine). Smoke driver kept at `C:\Users\Yash Thakor\AppData\Local\Temp\opencode\engine-smoke.py`.
+
+## D-058 — Icon resolution is a bounded, reported ladder, and the cache clears per app (`T-030`)
+- **Date:** 2026-10-18 · **Status:** Accepted (owner-reviewed; implements `ICON_RELIABILITY_RESEARCH.md` S1–S3)
+- **Context:** `get_icon_url` ran on every poll, so an app whose icon could not be resolved was
+  re-extracted and re-uploaded every `poll_interval` (5 s) forever — no attempt count, no backoff,
+  no negative cache — and the only visible log line named neither the stage nor the cause. The
+  retained log shows the cost: 117 WhatsApp fallbacks (114 in one day) for an MSIX exe that has no
+  icon resource at all, and 68 Antigravity fallbacks inside one 13-minute window that no log line
+  explains. The only user remedy was a global wipe (`Logs → Reset icon cache`, and `gui.py`'s
+  button) — no way to say "this app's icon is wrong, fetch it again".
+- **Decision (the five gating questions answered in the doc's §7):**
+  - **A three-attempt ladder, then a park** (`icons.py`): attempt 1 is immediate; attempts 2–3 land
+    on later polls with 1 s / 3 s minimum gaps (so a `poll_interval` of 1 s cannot hammer); after a
+    full sequence fails the app parks for **60 s → 5 min → 30 min**, growing per consecutive failed
+    sequence. A **hard** failure (nothing to extract) parks for 30 min immediately — retrying cannot
+    produce a resource that is not there. While parked or waiting, `get_icon_url` returns the
+    default and does no GDI or network work.
+  - **Only the last stage is retried.** Override → cache → SteamGridDB → extract+upload is
+    unchanged; the ladder counts the extract+upload stage. Each failed attempt logs at WARNING with
+    the stage, host(s) and error; the park logs once at INFO
+    (`Using default icon for <app> — <reason>; parked for … (trying again at HH:MM:SS)`). Parked
+    ticks are silent — a DEBUG line per tick would have repeated the disease in the file log, which
+    writes DEBUG.
+  - **An override still wins while parked** (checked before the ladder gate), so the documented
+    WhatsApp workaround — an `icon_url` override — applies immediately.
+  - **Per-app clearing:** `icons.clear_icon_cache(exe_paths)` removes exactly those entries and
+    resets their ladders so the next poll fetches again; `cached_icons()` feeds the list. The
+    protocol pair `clear_icon_cache` / `get_icon_cache` plus the `icon_cache` event connect the
+    shell; `commands.rs` forwards to the engine while it is connected — one writer per file — and
+    falls back to a direct atomic file edit when it is not. UI: **Refresh icon** in the Status card
+    and an **Icon cache** section in App Names (per-row Clear + Clear all), with the per-window icon
+    memo invalidated after a clear.
+  - **The failure state is visible:** the `app` event carries
+    `icon: {state: ok|pending|parked, attempts, retryAtMs, reason}` and the Status pane's Details
+    card renders it (`Resolved`, `Default — retrying (n of 3)`, `Default until HH:MM`).
+  - **Scope is `desktop/`.** No per-app UI in `gui.py` (maintenance only, per `AGENTS.md`); the Qt
+    build still gets the engine-side improvements because it shares `icons.py`, and its global reset
+    keeps working because `clear_icon_cache()` stayed call-compatible.
+  - **Smaller fixes from the same read:** `_save_cache` is atomic (temp + replace); a corrupt
+    `icon_cache.json` warns and starts empty instead of taking the poll loop down; upload failures
+    name the host and the error (previously swallowed at DEBUG); an untrusted override URL's
+    validation verdict is memoized (successes for the session, failures for 30 min) so it is probed
+    once instead of once per poll; and `presence.start_epoch` is stamped **at detection**, before
+    the icon work, so a slow or retrying fetch cannot shift the timer Discord counts from.
+- **Consequences:** A stuck app costs three attempts per park rung instead of an extract+upload
+  every 5 s; the log names the failing stage once per attempt; "the icon is wrong" has a per-app
+  remedy in the shell. `icon_cache.json` keeps its `{exe: url}` string format — turning the values
+  into objects would crash older builds (`urlparse(dict)` on `icons.py`).
+- **Rejected:** a forced presence update to push a refreshed icon immediately (it would bypass the
+  15 s rate limit and the dedupe contract, `D-006`); revalidating *trusted-host* cached URLs every
+  tick (dead-URL self-healing — tradeoff `T7` — stays measurement-gated; the per-app clear is the
+  manual remedy, and `S4` remains the automated one); retrying harder for packaged/MSIX exes —
+  WhatsApp's exe genuinely has no icon resource, so the Explorer-route extraction (`S5`/`E1`) stays
+  gated on the `T9` probe.
+- **Evidence:** `icons.py` (ladder, `clear_icon_cache`, `cached_icons`, `icon_state`, atomic write,
+  memoized validation), `engine_stdio.py` (protocol pair, `icon_cache` event, `AppInfo.icon`, the
+  detection-time stamp and the docstring's protocol table), `main.py` (the same stamp),
+  `desktop/src-tauri/src/{state,sidecar,service,commands}.rs`,
+  `desktop/src/{ipc/types.ts,ipc/mock.ts,lib/icons.ts,state/engine.ts}`,
+  `desktop/src/panes/{StatusPane,AppNamesPane,LogsPane}.tsx`; `ICON_RELIABILITY_RESEARCH.md` §7.
+  Verified: 22 ladder checks (`%TEMP%\opencode\icon-ladder-test.py`), 9 protocol checks
+  (`engine-proto-test.py`), the 9-case `cargo test` suite, `cargo check` and `npm run build`.
+  Landed as `bd2543e`.

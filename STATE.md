@@ -1,7 +1,7 @@
 # STATE.md — Current Project Snapshot
 
 > **Volatile file.** Overwrite freely. It answers: *"where are we right now?"*
-> Last updated: **2026-10-18** · Updated by: **engine seam + README rewrite committed; the icon-reliability proposal drafted (`ICON_RELIABILITY_RESEARCH.md`, `T-030`) — docs only**
+> Last updated: **2026-10-18** · Updated by: **icon reliability implemented end to end — bounded retry ladder + per-app icon cache clearing (`T-030`, `D-058`)**
 > Keep it short enough to read in 60 seconds.
 
 ---
@@ -13,10 +13,10 @@
 | Project | Discord AutoRPC |
 | Shipped version | `0.1.0-beta` (`updater.py::__version__`) — the Python/Qt build is still the shippable artifact; only additive changes this pass |
 | Desktop shell version | `0.2.0` (`desktop/package.json`, `desktop/src-tauri/Cargo.toml`, `tauri.conf.json`) |
-| Status | Python build: open beta, no test suite. **Rewrite: committed (`1795dce`), and the real engine is wired and verified end to end (`2f07b9f`, `T-022`, `D-057`). `G2` visual evidence (`T-023`) is all that is left before the gate.** |
+| Status | Python build: open beta, no test suite. **Rewrite: committed (`1795dce`), the real engine is wired and verified end to end (`2f07b9f`, `T-022`, `D-057`), and the icon pipeline is now bounded, reported and per-app clearable (`bd2543e`, `T-030`, `D-058`). `G2` visual evidence (`T-023`) is all that is left before the gate.** |
 | Branch | `main` |
-| HEAD | `2f07b9f` — feat(engine): drive the shell from the real Python engine (T-022) |
-| Working tree | clean; the docs landed with the seam commit |
+| HEAD | `bd2543e` — feat(icons): retry ladder, per-app cache clearing and icon status (T-030) |
+| Working tree | clean after the T-030 docs commit |
 | Platform | Windows 10 / 11 x64 only |
 | Python | 3.11+ (CI targets 3.12) · local 3.12.10 (Microsoft Store `python.exe`, on `PATH`) |
 | Toolchain | Node 24.15.0 · npm 11.12.1 · rustc/cargo 1.96.1 · MSVC 17.14.37314.3 |
@@ -36,24 +36,29 @@ falling back to the mock.
 - **What is left before `G2`:** `T-023` — the visual pass. Screenshots of every pane in **light and
   dark** at 100/150/200%, the no-flash check in both themes, a live System-mode OS theme change,
   tray-icon legibility on light/dark taskbars, keyboard-only onboarding/Settings, and the three
-  entry points in a **bundled** build.
+  entry points in a **bundled** build — plus a by-eye check of the two new controls the icon work
+  added (`T-030`): the Status card's **Refresh icon** button and the **Icon cache** section in
+  App Names.
 - **Next engineering task:** `T-028` (`P1`) — freeze the engine into `DiscordAutoRPC-engine.exe`
   and ship it beside the shell; without it an end user who installs the shell alone silently gets
   the mock.
 - **Still-open owner questions:** **Q2** (is a WebView2 runtime dependency acceptable for end
   users — this machine has `155.0.4283.62`), **Q7** (tray single- vs double-click; today
   left-click opens Settings, `TR-14`), **Q8** (code-signing budget, `T-017`).
-- **Awaiting owner sign-off:** `ICON_RELIABILITY_RESEARCH.md` — icon-fetch retries (a 3-attempt
-  ladder with an escalating park) and per-app icon cache clearing, with the measurement plan for
-  the tradeoffs. **Docs only; no code** (`T-030`, blocked on the doc's five questions). The
-  appendix already measured the current log: 117 WhatsApp fallbacks (its MSIX exe has no icon
-  resource — retries cannot fix it) and 68 Antigravity fallbacks with no explaining log line.
+- **Just landed:** `T-030` / `D-058` (`bd2543e`) — an app whose icon fails now retries exactly three
+  times (1 s / 3 s gaps), parks for 60 s → 5 min → 30 min (hard failures — no icon resource — park
+  for 30 min at once), logs *why* each attempt failed, and can be cleared per app from Settings
+  (Status card **Refresh icon**, App Names **Icon cache**). The removed per-tick re-extraction means
+  a stuck app like WhatsApp no longer re-uploads every 5 s; its MSIX exe still has no extractable
+  icon, so it needs an override `icon_url` until `S5`/`E1` is probed (`T9`).
 - **Run it:**
   - Dev shell: `cd desktop && npm run tauri dev` (spawns the engine; it finds `main.py` by walking
     up from the dev binary).
   - Mock shell: `$env:AUTORPC_ENGINE="mock"; npm run tauri dev`.
   - Engine alone: `python main.py --engine-stdio` (type JSON lines; EOF quits). Smoke harness:
     `%TEMP%\opencode\engine-smoke.py`.
+  - `T-030` harnesses (they fake extraction/upload; the real cache and Discord are never touched):
+    `%TEMP%\opencode\icon-ladder-test.py`, `%TEMP%\opencode\engine-proto-test.py`.
   - Builds: `npm run build` in `desktop/`, `cargo build` in `desktop/src-tauri/`.
 
 ---
@@ -62,6 +67,8 @@ falling back to the mock.
 
 | Commit | Date | Summary |
 |---|---|---|
+| `bd2543e` | 2026-10-18 | **Icon reliability (`T-030`, `D-058`).** A 3-attempt ladder with an escalating park in `icons.py` (hard failures park for 30 min), stage/host/error logging, atomic cache writes, a memoized URL-validation verdict, a detection-time `start_epoch` stamp, the `clear_icon_cache`/`get_icon_cache` protocol pair plus an `icon_cache` event and `AppInfo.icon`, and the UI: Status-card **Refresh icon** + App Names **Icon cache** section + memo invalidation. Verified by 22 ladder checks + 9 protocol checks + the 9-case `cargo test` suite; both builds clean. |
+| `f01cb02` | 2026-10-18 | Docs: the icon-reliability research and proposal (`ICON_RELIABILITY_RESEARCH.md`) + `T-030`/`T-013` bookkeeping. No code, by owner request. |
 | `2f07b9f` | 2026-10-18 | **Engine seam (`T-022`, `D-057`).** `engine_stdio.py` + a `main.py --engine-stdio` guard above the Qt imports; `sidecar.rs` (spawn, JSON lines, built-ins cache, polite quit, EOF reaping); `engine.rs` dispatch `mock`/`python`/`auto`; `set_paused` + `reload_config` forwards through `service.rs` so the tray cannot bypass them; `ExitRequested` → `sidecar::shutdown`; `detector.is_discord_running`/`built_in_taglines`, `presence.connected`/`start_epoch`; `B-11` and `B-14` fixed in `updater.py`. Verified: a real presence on a live Discord client, a real icon upload, and a clean EOF shutdown. |
 | `1795dce` | 2026-10-18 | **Rewrite Phase 1 committed** — the Tauri 2 shell + React/TS UI under `desktop/` (tray, six panes, onboarding, quick rename, design tokens, frozen IPC contract, mock engine), plus the spec and research docs. 80 files, 18.9k lines. Includes the owner-review fixes below. |
 | *(in `1795dce`)* | 2026-10-18 | **Owner-review fixes:** frameless chrome in all three windows (`D-055`, `windows.rs::strip_caption` because tao keeps `WS_CAPTION`) and scrolling panes (`D-056`, `min-height: 0` + reserved scrollbar gutter). Verified by driving the window: no caption at startup or maximized, `HTLEFT`/`HTTOP`/… hit tests intact, wheel scrolling reaches previously unreachable rows. |
@@ -83,7 +90,10 @@ falling back to the mock.
 - Incognito/private browsing masking for 8 browsers (`detector.is_incognito`).
 - Display-name resolution from PE `ProductName` / `FileDescription` with category-suffix stripping.
 - Dynamic taglines: browsers, Office, Notion/Obsidian, IDEs, media players.
-- Icon pipeline: `PrivateExtractIconsW` (256×256) → freeimage/catbox upload with failover → `icon_cache.json`.
+- Icon pipeline: `PrivateExtractIconsW` (256×256) → freeimage/catbox upload with failover →
+  `icon_cache.json`, now with a bounded retry ladder (3 attempts with 1 s / 3 s gaps, then a
+  60 s → 5 min → 30 min park; hard failures park for 30 min) and per-app cache clearing
+  (`T-030`, `D-058`).
 - Discord RPC with 15 s rate limit, dedupe, per-app start-time timer, auto-reconnect.
 - PyQt6 tray menu, 5-tab Settings window, onboarding wizard, single-instance mutex + wake event.
 
@@ -123,6 +133,12 @@ falling back to the mock.
   itself, so nothing is duplicated on disk.
 - **Real (not mocked) shell features:** Discord IPC probe for Test connection, autostart read/write
   with read-back, atomic config/prefs writes, icon-URL resolution, log seeding/export, clipboard.
+- **Icon cache management (`T-030`):** the Status pane's Details card reports the ladder's state
+  (`Resolved` / `Default — retrying (n of 3)` / `Default until HH:MM` with the failure reason), and
+  its **Refresh icon** button clears that app's entry. App Names carries an **Icon cache** section —
+  every cached icon with a per-row Clear and a Clear all. Clears route through the engine while it
+  runs (one writer per file, direct atomic file edit otherwise), and the per-window icon memo is
+  invalidated so a refresh shows without reloading.
 - **Frameless chrome** (`D-055`): all three windows draw their own caption; the Win32 caption is
   stripped and re-stripped after every show/maximize/minimize/resize. **Every pane scrolls**
   (`D-056`).
@@ -133,7 +149,7 @@ falling back to the mock.
 
 | # | Issue | Location | Severity |
 |---|---|---|---|
-| **R-1** | **`G2` visual evidence is still missing:** light-theme screenshots of every pane, the no-flash check in both themes, a live System-mode OS theme change, tray legibility on light/dark taskbars, 100/150/200% scaling, keyboard-only flows, and the three entry points in a **bundled** build. This is `T-023`. | `desktop/` | Blocker for `G2` |
+| **R-1** | **`G2` visual evidence is still missing:** light-theme screenshots of every pane, the no-flash check in both themes, a live System-mode OS theme change, tray legibility on light/dark taskbars, 100/150/200% scaling, keyboard-only flows, and the three entry points in a **bundled** build. Add a by-eye pass of `T-030`'s two new controls (Status card **Refresh icon**, App Names **Icon cache** section). This is `T-023`. | `desktop/` | Blocker for `G2` |
 | **R-4** | **The update *finding* has no UI surface.** The engine performs a real check and the shell stores it in `state.updateTag`, but nothing shows it yet (no tray item, no banner) — `T-024`. | `commands.rs`, `tray.rs` | Known `P2` |
 | **R-5** | **`config.json` defaults are mirrored in Rust** (`config_file.rs::DEFAULT_CONFIG_JSON`) next to `config.py::DEFAULT_CONFIG` and `config.example.json` — "adding a config key" is 5 edits until `T-025`. | `config_file.rs` | Known debt (`D-053`) |
 | **R-6** | Exports write to `<data dir>\exports\` instead of a native save dialog (`T-024`); the SteamGridDB "Test key" (`G-11`) and `restart_engine` are still unbuilt (`T-029`). | `commands.rs` | Known `P2` |
@@ -142,7 +158,7 @@ falling back to the mock.
 | B-1 | **Two competing autostart mechanisms** (`config.set_autostart_enabled()` → `main.py --startup`; `enable_autostart.bat` → `watcher.pyw`). Both count as enabled. | `config.py`, `watcher.pyw`, `*.bat` | High (Python build) |
 | B-2 | `watcher.pyw` is **not bundled** into the built exe, yet the README/bat files still reference the watcher workflow. | `watcher.pyw`, `enable_autostart.bat` | Medium |
 | B-3 | Version string is duplicated: `updater.py::__version__` vs README badges vs the release tag. | `updater.py`, `README.md` | Medium |
-| B-4 | `icons.py` docstring says catbox is the default; `DEFAULT_CONFIG["upload_host"]` is `"freeimage"`. | `icons.py`, `config.py` | Low |
+| ~~B-4~~ | **FIXED (`T-030`):** the `icons.py` docstring no longer names a default upload host; it names the configured one plus failover. The key constant and the README note remain as `T-005`. | `icons.py` | Resolved |
 | B-5 | `freeimage.host` API key is hardcoded in source. | `icons.py` | Low |
 | B-6 | Built-in tagline table is duplicated (`detector._BUILTIN_TAGLINES` vs `DEFAULT_CONFIG["taglines"]`). | `detector.py`, `config.py` | Low |
 | B-7 | No tests, no linter, no type checking, no CI test job **for the Python build** (the shell has `tsc` + `cargo build`, plus five `cargo test` cases covering protocol parsing since `D-057`). | repo-wide | Medium |
@@ -217,10 +233,10 @@ The shell's window geometry lives in `%APPDATA%\com.yashkthakor.discordautorpc\.
 | `AGENTS.md` | Operating manual: ground rules, architecture map (now including `engine_stdio.py` and `desktop/`), data-dir rules, session protocol. **Read first.** |
 | `STATE.md` | This snapshot. Volatile. |
 | `TASKS.md` | Work queue. `T-023` (G2 evidence) and `T-028` (frozen engine) are the live ones. |
-| `DECISIONS.md` | Append-only decision log. `D-001`…`D-019` = Python/engine era; `D-020`…`D-042` = G0; `D-043`…`D-053` = Phase 1; `D-054`…`D-056` = owner-review fixes; `D-057` = the engine seam (supersedes `D-050`'s mock default). Next free id `D-058`. |
+| `DECISIONS.md` | Append-only decision log. `D-001`…`D-019` = Python/engine era; `D-020`…`D-042` = G0; `D-043`…`D-053` = Phase 1; `D-054`…`D-056` = owner-review fixes; `D-057` = the engine seam (supersedes `D-050`'s mock default); `D-058` = the icon retry ladder + per-app cache clearing. Next free id `D-059`. |
 | `GUI_HANDOFF_TAURI_REACT.md` | The rewrite spec: §4 parity inventory (stable IDs), §11 gates, §13 open questions. **§0.1 is authoritative.** |
 | `desktop/COMPONENT_MAP.md` | §4 ID → component mapping, `P1`/`P2` markers, deferral table. Kept in step with the code. |
-| `ICON_RELIABILITY_RESEARCH.md` | **Draft for owner review (`T-030`):** why an icon falls back to the default, the retry ladder + per-app cache clearing proposals, and the tradeoffs to measure. No code yet, by request. |
+| `ICON_RELIABILITY_RESEARCH.md` | **Accepted and implemented (`T-030`, `D-058`):** why an icon falls back to the default, the retry ladder as built, per-app cache clearing, and the measurement plan for the tradeoffs. §7 records the owner's answers; `S4`/`S5` stay gated. |
 | `RUST_MIGRATION_RESEARCH.md` | Deprioritized: the full-Rust-rewrite research. Reference only. |
 
 > The Python engine's public surface grew by four additive helpers (`detector.is_discord_running`,
