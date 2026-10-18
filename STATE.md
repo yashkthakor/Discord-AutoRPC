@@ -1,7 +1,7 @@
 # STATE.md — Current Project Snapshot
 
 > **Volatile file.** Overwrite freely. It answers: *"where are we right now?"*
-> Last updated: **2026-10-18** · Updated by: **icon reliability implemented end to end — bounded retry ladder + per-app icon cache clearing (`T-030`, `D-058`)**
+> Last updated: **2026-10-18** · Updated by: **MSIX/Store app icons fetched from the package's manifest assets — the `T9` probe run and implemented (`T-031`, `D-059`)**
 > Keep it short enough to read in 60 seconds.
 
 ---
@@ -13,10 +13,10 @@
 | Project | Discord AutoRPC |
 | Shipped version | `0.1.0-beta` (`updater.py::__version__`) — the Python/Qt build is still the shippable artifact; only additive changes this pass |
 | Desktop shell version | `0.2.0` (`desktop/package.json`, `desktop/src-tauri/Cargo.toml`, `tauri.conf.json`) |
-| Status | Python build: open beta, no test suite. **Rewrite: committed (`1795dce`), the real engine is wired and verified end to end (`2f07b9f`, `T-022`, `D-057`), and the icon pipeline is now bounded, reported and per-app clearable (`bd2543e`, `T-030`, `D-058`). `G2` visual evidence (`T-023`) is all that is left before the gate.** |
+| Status | Python build: open beta, no test suite. **Rewrite: committed (`1795dce`), the real engine is wired and verified end to end (`2f07b9f`, `T-022`, `D-057`), the icon pipeline is bounded, reported and per-app clearable (`bd2543e`, `T-030`, `D-058`), and the Store-app icon failure measured in the log is now fixed — real icons from the package's manifest assets (`05b1bb5`, `T-031`, `D-059`). `G2` visual evidence (`T-023`) is all that is left before the gate.** |
 | Branch | `main` |
-| HEAD | `bd2543e` — feat(icons): retry ladder, per-app cache clearing and icon status (T-030) |
-| Working tree | clean after the T-030 docs commit |
+| HEAD | `05b1bb5` — feat(icons): packaged (MSIX) app icons from package manifest assets (T-031) |
+| Working tree | clean after the T-031 docs commit |
 | Platform | Windows 10 / 11 x64 only |
 | Python | 3.11+ (CI targets 3.12) · local 3.12.10 (Microsoft Store `python.exe`, on `PATH`) |
 | Toolchain | Node 24.15.0 · npm 11.12.1 · rustc/cargo 1.96.1 · MSVC 17.14.37314.3 |
@@ -38,27 +38,34 @@ falling back to the mock.
   tray-icon legibility on light/dark taskbars, keyboard-only onboarding/Settings, and the three
   entry points in a **bundled** build — plus a by-eye check of the two new controls the icon work
   added (`T-030`): the Status card's **Refresh icon** button and the **Icon cache** section in
-  App Names.
+  App Names, and a WhatsApp focus (its icon now resolves through the package assets, `T-031`).
 - **Next engineering task:** `T-028` (`P1`) — freeze the engine into `DiscordAutoRPC-engine.exe`
   and ship it beside the shell; without it an end user who installs the shell alone silently gets
   the mock.
 - **Still-open owner questions:** **Q2** (is a WebView2 runtime dependency acceptable for end
   users — this machine has `155.0.4283.62`), **Q7** (tray single- vs double-click; today
   left-click opens Settings, `TR-14`), **Q8** (code-signing budget, `T-017`).
-- **Just landed:** `T-030` / `D-058` (`bd2543e`) — an app whose icon fails now retries exactly three
-  times (1 s / 3 s gaps), parks for 60 s → 5 min → 30 min (hard failures — no icon resource — park
-  for 30 min at once), logs *why* each attempt failed, and can be cleared per app from Settings
-  (Status card **Refresh icon**, App Names **Icon cache**). The removed per-tick re-extraction means
-  a stuck app like WhatsApp no longer re-uploads every 5 s; its MSIX exe still has no extractable
-  icon, so it needs an override `icon_url` until `S5`/`E1` is probed (`T9`).
+- **Just landed:** `T-031` / `D-059` (`05b1bb5`) — the `T9` probe measured every shell icon route
+  (`SHGetFileInfoW` LARGE, `SHGetImageList` JUMBO, `IShellItemImageFactory::GetImage`) returning
+  Windows' *generic placeholder* for Store-app stub exes, so `icons._extract_icon_image` gained a
+  third approach that reads the real icon from the package's `AppxManifest.xml` assets
+  (`targetsize-256`, unplated preferred). WhatsApp now caches a real 256×256 icon with **no
+  override** — the measured dominant failure from `T-030` is gone. (Unchanged from `T-030`/`D-058`:
+  the bounded retry ladder and the per-app cache controls.)
+- **Also live:** `T-030` / `D-058` (`bd2543e`) — an app whose icon fails retries exactly three times
+  (1 s / 3 s gaps), parks for 60 s → 5 min → 30 min (hard failures at once), logs *why* each attempt
+  failed, and can be cleared per app from Settings (Status card **Refresh icon**, App Names
+  **Icon cache**).
 - **Run it:**
   - Dev shell: `cd desktop && npm run tauri dev` (spawns the engine; it finds `main.py` by walking
     up from the dev binary).
   - Mock shell: `$env:AUTORPC_ENGINE="mock"; npm run tauri dev`.
   - Engine alone: `python main.py --engine-stdio` (type JSON lines; EOF quits). Smoke harness:
     `%TEMP%\opencode\engine-smoke.py`.
-  - `T-030` harnesses (they fake extraction/upload; the real cache and Discord are never touched):
-    `%TEMP%\opencode\icon-ladder-test.py`, `%TEMP%\opencode\engine-proto-test.py`.
+  - Icon harnesses (they fake extraction/upload or build a temp package tree; the real cache and
+    Discord are never touched): `%TEMP%\opencode\icon-ladder-test.py`, `engine-proto-test.py`
+    (`T-030`), `msix-icon-test.py` (`T-031`, ends with the real WhatsApp package when installed).
+  - `T9` probe (read-only, one PNG per route): `%TEMP%\opencode\t9-probe.py` → `t9-out\`.
   - Builds: `npm run build` in `desktop/`, `cargo build` in `desktop/src-tauri/`.
 
 ---
@@ -67,6 +74,7 @@ falling back to the mock.
 
 | Commit | Date | Summary |
 |---|---|---|
+| `05b1bb5` | 2026-10-18 | **Store-app icons (`T-031`, `D-059`).** The `T9` probe: `PrivateExtractIconsW`/`ExtractIconEx` and every shell/COM route fail or return the generic placeholder for `WhatsApp.Root.exe`; the package's manifest assets hold the real 256×256 icon. `icons._extract_icon_image` gained approach 3: scope `\WindowsApps\`, walk up to the package root, parse `AppxManifest.xml` (bounded cache), match by exe basename, prefer `targetsize-256` unplated with corrupt/non-square fallthrough; `ExtractIconEx` gained a local catch. Verified: 17 new checks + the real WhatsApp package + the 22 ladder and 9 protocol checks re-run. |
 | `bd2543e` | 2026-10-18 | **Icon reliability (`T-030`, `D-058`).** A 3-attempt ladder with an escalating park in `icons.py` (hard failures park for 30 min), stage/host/error logging, atomic cache writes, a memoized URL-validation verdict, a detection-time `start_epoch` stamp, the `clear_icon_cache`/`get_icon_cache` protocol pair plus an `icon_cache` event and `AppInfo.icon`, and the UI: Status-card **Refresh icon** + App Names **Icon cache** section + memo invalidation. Verified by 22 ladder checks + 9 protocol checks + the 9-case `cargo test` suite; both builds clean. |
 | `f01cb02` | 2026-10-18 | Docs: the icon-reliability research and proposal (`ICON_RELIABILITY_RESEARCH.md`) + `T-030`/`T-013` bookkeeping. No code, by owner request. |
 | `2f07b9f` | 2026-10-18 | **Engine seam (`T-022`, `D-057`).** `engine_stdio.py` + a `main.py --engine-stdio` guard above the Qt imports; `sidecar.rs` (spawn, JSON lines, built-ins cache, polite quit, EOF reaping); `engine.rs` dispatch `mock`/`python`/`auto`; `set_paused` + `reload_config` forwards through `service.rs` so the tray cannot bypass them; `ExitRequested` → `sidecar::shutdown`; `detector.is_discord_running`/`built_in_taglines`, `presence.connected`/`start_epoch`; `B-11` and `B-14` fixed in `updater.py`. Verified: a real presence on a live Discord client, a real icon upload, and a clean EOF shutdown. |
@@ -90,8 +98,9 @@ falling back to the mock.
 - Incognito/private browsing masking for 8 browsers (`detector.is_incognito`).
 - Display-name resolution from PE `ProductName` / `FileDescription` with category-suffix stripping.
 - Dynamic taglines: browsers, Office, Notion/Obsidian, IDEs, media players.
-- Icon pipeline: `PrivateExtractIconsW` (256×256) → freeimage/catbox upload with failover →
-  `icon_cache.json`, now with a bounded retry ladder (3 attempts with 1 s / 3 s gaps, then a
+- Icon pipeline: `PrivateExtractIconsW` (256×256) → `ExtractIconEx` → **MSIX package manifest assets**
+  for Store apps whose exe has no icon resource (`T-031`, `D-059`) → freeimage/catbox upload with
+  failover → `icon_cache.json`, with a bounded retry ladder (3 attempts with 1 s / 3 s gaps, then a
   60 s → 5 min → 30 min park; hard failures park for 30 min) and per-app cache clearing
   (`T-030`, `D-058`).
 - Discord RPC with 15 s rate limit, dedupe, per-app start-time timer, auto-reconnect.
@@ -149,7 +158,7 @@ falling back to the mock.
 
 | # | Issue | Location | Severity |
 |---|---|---|---|
-| **R-1** | **`G2` visual evidence is still missing:** light-theme screenshots of every pane, the no-flash check in both themes, a live System-mode OS theme change, tray legibility on light/dark taskbars, 100/150/200% scaling, keyboard-only flows, and the three entry points in a **bundled** build. Add a by-eye pass of `T-030`'s two new controls (Status card **Refresh icon**, App Names **Icon cache** section). This is `T-023`. | `desktop/` | Blocker for `G2` |
+| **R-1** | **`G2` visual evidence is still missing:** light-theme screenshots of every pane, the no-flash check in both themes, a live System-mode OS theme change, tray legibility on light/dark taskbars, 100/150/200% scaling, keyboard-only flows, and the three entry points in a **bundled** build. Add a by-eye pass of `T-030`'s two new controls (Status card **Refresh icon**, App Names **Icon cache** section) and of a WhatsApp focus (its icon now resolves through the package assets, `T-031`). This is `T-023`. | `desktop/` | Blocker for `G2` |
 | **R-4** | **The update *finding* has no UI surface.** The engine performs a real check and the shell stores it in `state.updateTag`, but nothing shows it yet (no tray item, no banner) — `T-024`. | `commands.rs`, `tray.rs` | Known `P2` |
 | **R-5** | **`config.json` defaults are mirrored in Rust** (`config_file.rs::DEFAULT_CONFIG_JSON`) next to `config.py::DEFAULT_CONFIG` and `config.example.json` — "adding a config key" is 5 edits until `T-025`. | `config_file.rs` | Known debt (`D-053`) |
 | **R-6** | Exports write to `<data dir>\exports\` instead of a native save dialog (`T-024`); the SteamGridDB "Test key" (`G-11`) and `restart_engine` are still unbuilt (`T-029`). | `commands.rs` | Known `P2` |
@@ -190,6 +199,13 @@ falling back to the mock.
 - **`sys.stdin` is unusable in the reader thread:** a daemon thread holding a `BufferedReader`
   lock at interpreter shutdown aborts CPython with `_enter_buffered_busy` (exit code `0xC0000005`).
   `engine_stdio.py` reads the raw fd with `os.read` instead (`D-057`).
+- **Store-app packages are readable:** a `…\WindowsApps\…` package folder, its `AppxManifest.xml`
+  and `Assets\*.png` all read fine as a normal user (verified 2026-10-18, `T9`) — the ACL note in
+  the icon research doc was wrong on this machine. The path is version-stamped, which is a *cache
+  advantage*: a detected exe path always carries the current package version.
+- **Shell icon routes do not help Store stubs:** `SHGetFileInfoW` (LARGE and `SHGFI_SYSICONINDEX` +
+  `SHGetImageList` JUMBO) and `IShellItemImageFactory::GetImage` answer with Windows' generic
+  placeholder for exes like `WhatsApp.Root.exe`; only the package manifest has the real artwork.
 - **`tauri dev` restarts the app on every Rust edit** — each restart kills the shell, so the engine
   sees EOF and exits. That is the expected path, not a bug; it is why the log shows repeated
   `Starting the engine` / `The shell closed the protocol pipe` pairs.
@@ -233,10 +249,10 @@ The shell's window geometry lives in `%APPDATA%\com.yashkthakor.discordautorpc\.
 | `AGENTS.md` | Operating manual: ground rules, architecture map (now including `engine_stdio.py` and `desktop/`), data-dir rules, session protocol. **Read first.** |
 | `STATE.md` | This snapshot. Volatile. |
 | `TASKS.md` | Work queue. `T-023` (G2 evidence) and `T-028` (frozen engine) are the live ones. |
-| `DECISIONS.md` | Append-only decision log. `D-001`…`D-019` = Python/engine era; `D-020`…`D-042` = G0; `D-043`…`D-053` = Phase 1; `D-054`…`D-056` = owner-review fixes; `D-057` = the engine seam (supersedes `D-050`'s mock default); `D-058` = the icon retry ladder + per-app cache clearing. Next free id `D-059`. |
+| `DECISIONS.md` | Append-only decision log. `D-001`…`D-019` = Python/engine era; `D-020`…`D-042` = G0; `D-043`…`D-053` = Phase 1; `D-054`…`D-056` = owner-review fixes; `D-057` = the engine seam (supersedes `D-050`'s mock default); `D-058` = the icon retry ladder + per-app cache clearing; `D-059` = Store-app icons from the package manifest assets (`T-031`). Next free id `D-060`. |
 | `GUI_HANDOFF_TAURI_REACT.md` | The rewrite spec: §4 parity inventory (stable IDs), §11 gates, §13 open questions. **§0.1 is authoritative.** |
 | `desktop/COMPONENT_MAP.md` | §4 ID → component mapping, `P1`/`P2` markers, deferral table. Kept in step with the code. |
-| `ICON_RELIABILITY_RESEARCH.md` | **Accepted and implemented (`T-030`, `D-058`):** why an icon falls back to the default, the retry ladder as built, per-app cache clearing, and the measurement plan for the tradeoffs. §7 records the owner's answers; `S4`/`S5` stay gated. |
+| `ICON_RELIABILITY_RESEARCH.md` | **Accepted and implemented (`T-030`, `D-058`), plus the `T9` probe result (`T-031`, `D-059`):** why an icon falls back to the default, the retry ladder as built, per-app cache clearing, the route-by-route probe table (shell routes → placeholder; manifest assets → the real icon), and the measurement plan for the tradeoffs. §7 records the owner's answers; `S4` stays gated. |
 | `RUST_MIGRATION_RESEARCH.md` | Deprioritized: the full-Rust-rewrite research. Reference only. |
 
 > The Python engine's public surface grew by four additive helpers (`detector.is_discord_running`,

@@ -222,6 +222,32 @@
 
 ## § Next (P2)
 
+### T-031 — Packaged (MSIX/Store) app icons from package manifest assets — `P2` — `DONE` (2026-10-18, `05b1bb5`)
+- **Probe (`T9`, run 2026-10-18; `%TEMP%\opencode\t9-probe.py`, artifacts in `%TEMP%\opencode\t9-out\`):**
+  against WhatsApp's `…\WindowsApps\…\WhatsApp.Root.exe` (package `5319275A.WhatsAppDesktop_2.2640.100.0_x64__cv1g1gvanyjgm`)
+  — `PrivateExtractIconsW` and `ExtractIconEx` find no icon resource, and every shell route
+  (`SHGetFileInfoW` LARGE, `SHGFI_SYSICONINDEX` + `SHGetImageList` JUMBO,
+  `IShellItemImageFactory::GetImage` ICONONLY) answers with Windows' **generic placeholder**, not the
+  app's icon (`SIIGBF_THUMBNAILONLY` fails with `0x8004B200`). The package root, `AppxManifest.xml` and
+  `Assets\` are **readable by a normal user**, and `<uap:VisualElements Square44x44Logo="Assets\AppList.png">`
+  resolves to a real 256×256 RGBA asset (`AppList.targetsize-256_altform-unplated.png`) — the artwork
+  Start and the taskbar actually show.
+- **Delivered:** a third extraction approach in `icons._extract_icon_image`, scoped to
+  `…\WindowsApps\…` paths: walk up to the package root, parse the manifest (per-package cache, bounded
+  at 32), match the `Application` by exe basename (first application as fallback), then resolve the
+  best existing logo variant (`Square44x44Logo` → `targetsize-256` unplated first; corrupt or
+  non-square variants fall through to the next). `ExtractIconEx` gained a local try/except so a stub
+  exe that raises there cannot skip the new route. No protocol, config-key or UI change — the ladder
+  now reports `ok` for these apps instead of hard-parking on "no icon resource".
+- **Evidence:** 17 checks in `%TEMP%\opencode\msix-icon-test.py` (fake package: variant preference,
+  nested walk-up, case-insensitive exe match, first-app fallback, corrupt-variant fallthrough,
+  non-square rejection, missing manifest/logos, cache bound, end-to-end upload through `get_icon_url`)
+  plus the real WhatsApp package through the full chain, icon confirmed by eye (256×256, transparent);
+  22 ladder checks + 9 protocol checks re-run clean.
+- **For the owner:** WhatsApp no longer needs an override `icon_url` — the next poll after this build
+  caches the real icon (or press **Refresh icon** in the Status card once). The fix lives in the
+  engine, so the Qt build gets it too on the next release.
+
 ### T-030 — Icon reliability: bounded retries + per-app cache clearing — `P2` — `DONE` (2026-10-18, `bd2543e`)
 - **Outcome (owner answers, `D-058`, doc §7):** `desktop/` only (no new `gui.py` UI); 3 attempts
   then the 60 s → 5 min → 30 min park; UI in **both** the Status card ("Refresh icon") and App Names
@@ -245,9 +271,9 @@
 - **Evidence:** 22 ladder checks (`%TEMP%\opencode\icon-ladder-test.py`), 9 protocol checks
   (`engine-proto-test.py`), `cargo test` 9/9, `cargo check` + `npm run build` clean. Live UI review
   of the two new controls rides with `T-023`.
-- **Not done, on purpose:** `S4` (trusted-host revalidation) stays measurement-gated, and
-  `S5`/`E1` (packaged-app icons via the Explorer route) stays gated on the `T9` probe. WhatsApp
-  still cannot get a real icon without an override — its MSIX exe has no icon resource at all.
+- **Not done, on purpose:** `S4` (trusted-host revalidation) stays measurement-gated. `S5`/`E1`
+  (packaged-app icons) was probed and implemented as `T-031` — the Explorer/COM shell routes measured
+  only return Windows' generic placeholder, so the icon now comes from the package's manifest assets.
 - **Folds in:** `T-013` (per-app icon refresh), superseded 2026-10-18.
 
 ### T-003 — Single-source the version string — `P2` — `TODO` *(fixes B-3)*
@@ -341,3 +367,4 @@
 | `T-021` | `1795dce` | 2026-10-18 | Q1 answered — Option A, the Python sidecar over stdio (`D-043`). Q2/Q7/Q8 stayed open and live in the handoff §13. |
 | `T-022` | `2f07b9f` | 2026-10-18 | Engine seam: `engine_stdio.py` + `sidecar.rs`, verified end to end on a live Discord client. Design and rationale in `D-057`; detail in the entry above. |
 | `T-030` | `bd2543e` | 2026-10-18 | Icon reliability: a 3-attempt ladder with an escalating park, per-app icon cache clearing (Status card + App Names), and the icon ladder state in the `app` event. Owner-reviewed design (`D-058`); supersedes `T-013`. |
+| `T-031` | `05b1bb5` | 2026-10-18 | Packaged (MSIX) app icons from the package's manifest assets (`D-059`) — the `T9` probe measured every shell route returning the generic placeholder; fixes the WhatsApp class-C case with no override. |

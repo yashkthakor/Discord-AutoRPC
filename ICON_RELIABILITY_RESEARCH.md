@@ -1,8 +1,10 @@
 # Icon reliability — research and proposal
 
 > **Status:** accepted by the owner and implemented (2026-10-18, `bd2543e`, decision `D-058`).
-> The answers to §7 are recorded there. `S4` (trusted-host revalidation) and `S5`/`E1`
-> (packaged-app icons via the Explorer route) remain gated on measurement and the `T9` probe.
+> The answers to §7 are recorded there. `S4` (trusted-host revalidation) remains gated on measurement.
+> `S5`/`E1` (packaged-app icons) was **probed on 2026-10-18** (`T9`) and resolved as `T-031`/`D-059`:
+> the Explorer/COM routes only return Windows' generic placeholder, so the icon is now read from the
+> package's `AppxManifest.xml` assets instead.
 > **Owner request:** *"when the app detects that the icon isn't visible or it's falling back to the
 > default icons, it instead tries at least 3 times to fetch the icon from the current mechanism, and
 > only after that if it fails, it reverts to the default. also implement a system in the settings of
@@ -114,6 +116,17 @@ is ACL-restricted and package paths are version-stamped. Recommendation: a 30-li
 against WhatsApp *before* designing anything; it is the only option that needs no user action.
 **Out of scope for the retry request, but it is the measured dominant failure on this machine.**
 
+**Probed and resolved 2026-10-18 (`T9` → `T-031`/`D-059`).** Option **(b) measured, and it fails**:
+`SHGetFileInfoW` (LARGE, and `SHGFI_SYSICONINDEX` + `SHGetImageList` JUMBO) and
+`IShellItemImageFactory::GetImage` all answer with Windows' **generic placeholder** for the stub exe,
+not the app's icon. Option **(c) measured, and the "fragile" note above was wrong on this machine**:
+the package root, `AppxManifest.xml` and `Assets\` are readable by a normal user, and the manifest's
+`Square44x44Logo` resolves to `AppList.targetsize-256_altform-unplated.png` — a 256×256 RGBA icon, the
+same artwork Start and the taskbar display. Implemented as approach 3 in `icons._extract_icon_image`,
+scoped to `\WindowsApps\` paths with a per-package manifest cache. Version-stamped paths turned out to
+be an *advantage*: the detected exe path always carries the current package version, so the cache key
+cannot go stale.
+
 **Honest note:** compared with today, an app stuck in class B/C goes from ~720 attempts/hour to
 ≤ 3 + 3/hour — that is a *reduction* in attempts, while making the three fast attempts real,
 ordered and visible. If "keep retrying every tick like today" is preferred over a park, the rungs
@@ -185,7 +198,7 @@ extending it to "clear the selected app's icon" is ~30 lines (a combo built from
 | **T6** | **Write races.** The engine writes non-atomically (`icons.py:48`); the shell deletes and reads the same file (`commands.rs:274`, `328`). Protocol-routed clears remove the race for clears, not for engine writes. | Corrupt-file repro: force a write during a delete; validate the JSON on every read for a day (add a JSON-error log line). | Make `_save_cache` atomic (temp + rename, the shell's own pattern) as part of S3. |
 | **T7** | **Trusted-host liveness (F3/D).** Manual clearing may be enough — or entries may die often enough to justify automatic revalidation. | Probe the current `icon_cache.json` entries now, then periodically; track the death rate. | If > ~10 % of entries die per month, add lazy revalidation (at most once per app per session, budgeted); otherwise keep it manual. |
 | **T8** | **Untrusted-host probing (F6).** Memoizing the verdict changes when a *fixed* override URL starts working. | Count how often a non-trusted `icon_url` is in use; measure the probe cost per tick. | If rare: memoize with the retry ladder (the ladder always re-probes after failures). |
-| **T9** | **Packaged-app icons (E1).** Whether the Explorer-style route (`IShellItemImageFactory::GetImage` / `SHGetFileInfo(SHGFI_ICON)`) returns WhatsApp's icon at all on Win10/11. | 20–30-line probe against `…\WindowsApps\…\WhatsApp.exe` and one UWP app; compare with what Explorer shows. | If it works, class-C apps get real icons (and their per-5-second GDI churn disappears). If not, document override `icon_url` as the answer and park the idea. |
+| **T9** | **Packaged-app icons (E1).** Whether the Explorer-style route (`IShellItemImageFactory::GetImage` / `SHGetFileInfo(SHGFI_ICON)`) returns WhatsApp's icon at all on Win10/11. | **Run 2026-10-18** (`%TEMP%\opencode\t9-probe.py`): every shell route → the generic placeholder; the package's manifest assets → the real 256 px icon. | **Resolved:** the shell routes were rejected by measurement; the manifest-asset route shipped as `T-031`/`D-059`. |
 
 ---
 
@@ -197,10 +210,11 @@ extending it to "clear the selected app's icon" is ~30 lines (a combo built from
 | **S2** | The retry ladder in `icons.py`, plus an optional `iconState` field in the `app` event so the Status pane can say *why* the default is showing. | Behaviour change for stuck apps (fewer attempts, occasional park). |
 | **S3** | Per-app clear: `icons` API → protocol pair → shell commands → Status card + App Names section + memo invalidation (`T-030`). | Additive changes to the frozen IPC contract (`types.ts`). |
 | **S4** | Trusted-host revalidation — **only if T7 shows entries dying.** | Adds probes; gate on the measurement. |
-| **S5 (option)** | Packaged-app icons via the Explorer route (E1) — gated on the T9 probe. | New COM/GDI paths; must not slow the tick loop. |
+| **S5** | Packaged-app icons — **landed as the manifest-asset route, not the Explorer route** (`T-031`, `D-059`, `05b1bb5`): the `T9` probe measured the COM/shell paths returning only the generic placeholder. | Local file reads only; no COM and no extra GDI on the tick path. |
 
 **Landed 2026-10-18 in `bd2543e`:** S1, S2 and S3. The appendix measurements below sized the failure
-classes; the ladder values are the owner's choice (§7). S4 and S5 stay gated.
+classes; the ladder values are the owner's choice (§7). S4 stays gated; S5 landed as `T-031`
+(`05b1bb5`) in the manifest-asset form.
 
 ---
 
@@ -217,6 +231,9 @@ classes; the ladder values are the owner's choice (§7). S4 and S5 stay gated.
 4. **Cache metadata:** keep `icon_cache.json` as `{exe: url}` strings. No format change.
 5. **Surface the failure state:** yes — the `app` event carries
    `icon: {state, attempts, retryAtMs, reason}` and the Status pane's Details card renders it.
+6. **After review (2026-10-18):** *"let's try to fix the msix store app's caveats. go through with
+   your recommended path to see if it can be fetched automatically"* — the `T9` probe was run and the
+   manifest-asset route implemented the same day (`T-031`, `05b1bb5`, `D-059`).
 
 ---
 
@@ -241,3 +258,19 @@ backups exist):
 - `icon_cache.json` — 17 entries
 
 Re-run these after S1 lands; the S1 lines are what the ladder values should be chosen from.
+
+### `T9` probe result (2026-10-18)
+
+Route-by-route, against WhatsApp `WhatsApp.Root.exe` (package `…WhatsAppDesktop_2.2640.100.0…`):
+
+| Route | Result |
+|---|---|
+| `PrivateExtractIconsW` (icons.py approach 1) | no icon resource |
+| `ExtractIconEx` (approach 2, and on every sibling exe) | no icon resource |
+| `SHGetFileInfoW` + `SHGFI_ICON \| SHGFI_LARGEICON` | 32×32 **generic placeholder** |
+| `SHGFI_SYSICONINDEX` + `SHGetImageList(SHIL_JUMBO)` | 256×256 **generic placeholder** |
+| `IShellItemImageFactory::GetImage(SIIGBF_ICONONLY)` | 256×256 **generic placeholder** |
+| `IShellItemImageFactory::GetImage(SIIGBF_THUMBNAILONLY)` | fails, `0x8004B200` |
+| `AppxManifest.xml` → `Square44x44Logo = Assets\AppList.png` → `AppList.targetsize-256_altform-unplated.png` | **real 256×256 RGBA icon** ✅ |
+
+Raw artifacts (one PNG per route): `%TEMP%\opencode\t9-out\`; probe script `%TEMP%\opencode\t9-probe.py`.

@@ -858,3 +858,65 @@
   Verified: 22 ladder checks (`%TEMP%\opencode\icon-ladder-test.py`), 9 protocol checks
   (`engine-proto-test.py`), the 9-case `cargo test` suite, `cargo check` and `npm run build`.
   Landed as `bd2543e`.
+
+## D-059 — Packaged (MSIX/Store) app icons come from the package's manifest assets (`T-031`, closes the `T9` probe)
+- **Date:** 2026-10-18 · **Status:** Accepted (implements the `T9` probe outcome; closes `S5`/`E1`)
+- **Context:** `D-058` left the dominant measured failure un-fixed on purpose: WhatsApp's Store exe
+  (`…\WindowsApps\…\WhatsApp.Root.exe`) has no icon resource, so both extraction routes come up empty,
+  nothing gets cached, and the app parks on the default icon — 117 fallbacks in the retained log.
+  `S5`/`E1` guessed the fix might be the Explorer-style route (`IShellItemImageFactory::GetImage`,
+  `SHGetFileInfo(SHGFI_ICON)`) and gated it on the `T9` probe. The owner asked for that probe, to see
+  whether the icon can be fetched automatically.
+- **The probe (`T9`, 2026-10-18, `%TEMP%\opencode\t9-probe.py`) measured every candidate route**
+  against the real package: `PrivateExtractIconsW` and `ExtractIconEx` fail (the exe is readable, MZ,
+  simply has no icon resource); `SHGetFileInfoW` (LARGE, and `SHGFI_SYSICONINDEX` +
+  `SHGetImageList(SHIL_JUMBO)`) and `IShellItemImageFactory::GetImage(SIIGBF_ICONONLY)` all succeed
+  but return **Windows' generic placeholder**, not the app's icon (`SIIGBF_THUMBNAILONLY` fails with
+  `0x8004B200`). The real artwork — the same one Start and the taskbar show — is a PNG inside the
+  package: `AppxManifest.xml` (readable by a normal user, contrary to the earlier ACL assumption)
+  references `Square44x44Logo = Assets\AppList.png`, and
+  `Assets\AppList.targetsize-256_altform-unplated.png` is a 256×256 RGBA image. Visual check of the
+  four outputs confirmed the shell routes render the placeholder.
+- **Decision:**
+  - **Approach 3 in `icons._extract_icon_image`**, after both resource routes: for exe paths under
+    `\WindowsApps\`, walk up (≤ 4 levels) to the directory holding `AppxManifest.xml`, parse it, and
+    read the icon from the logo assets. Keeping the manifest route last leaves classic-app behavior
+    byte-identical.
+  - **Manifest handling:** namespace-agnostic (local-name matching — schema prefixes vary), collects
+    `VisualElements` + `DefaultTile` PNG attributes per `Application`, keyed by executable basename
+    (the `Executable` attribute may be a relative path); an unknown exe falls back to the first
+    application. Parsed manifests are cached per package directory, bounded at 32 entries;
+    unreadable/malformed manifests cache as `None`.
+  - **Asset preference:** `Square44x44Logo` → `Square150x150Logo` → `Square310x310Logo` →
+    `Square71x71Logo`; per attribute `targetsize-256_altform-unplated` → `targetsize-256` →
+    `scale-400/200/100` → the plain file the manifest names → any variant the package ships (ranked),
+    **first one that opens as an image wins** — so a corrupt preferred variant falls through instead
+    of abandoning the app. Non-square or <16 px assets are rejected (a stretched logo would look worse
+    than the default); anything not exactly 256×256 is resized with LANCZOS (the pipeline's
+    convention).
+  - **`ExtractIconEx` gained a local try/except** (logged at DEBUG): a stub exe that raises there must
+    not stop the package-asset route, which needs only the package.
+  - **No protocol, config-key or UI change.** The ladder now reports `ok` for these apps because
+    extraction succeeds; the per-app clear and the Status-pane state render unchanged.
+  - Version-stamped package paths are an *advantage*: the detected exe path always carries the current
+    package version, so the manifest cache key cannot go stale — a package update simply misses the
+    cache and re-parses.
+- **Consequences:** The measured dominant failure disappears — WhatsApp caches a real 256×256 icon on
+  its next poll, with no override needed; a hard park now means "genuinely unreadable package" rather
+  than "Store app". The Qt build inherits the fix because it shares `icons.py`. No migration and no
+  cache-format change; users see it with the next release.
+- **Rejected:** the Explorer/COM routes (`S5` as originally sketched) — measured to return the generic
+  placeholder for exactly the exes that need help, while adding COM + GDI work to the tick path;
+  `Get-AppxPackage`/PowerShell to locate the package (a subprocess per app — the exe path already
+  contains the package root); WinRT package APIs (not reachable from a plain CPython process);
+  preferring the manifest route *before* the exe's own resource (the exe's own icon is the app's own
+  choice, and the current order keeps classic apps unchanged); shipping a per-app override for
+  WhatsApp or a new config key (user-visible data where the fix belongs in the engine).
+- **Evidence:** `icons.py` (`_extract_msix_icon_image`, `_parse_appx_manifest`, `_find_package_root`,
+  `_msix_asset_candidates`, the `_MSIX_*` constants, the `ExtractIconEx` catch). Verified: 17 checks
+  in `%TEMP%\opencode\msix-icon-test.py` (fake package: variant preference, nested walk-up,
+  case-insensitive exe match, first-app fallback, corrupt-variant fallthrough, non-square rejection,
+  missing manifest/logos, cache bound, end-to-end upload through `get_icon_url`) plus the real
+  WhatsApp package through the full chain (icon confirmed by eye); the 22 ladder checks and 9 protocol
+  checks from `D-058` re-run clean. `ICON_RELIABILITY_RESEARCH.md` `T9`/`S5`/appendix updated.
+  Landed as `05b1bb5`.
