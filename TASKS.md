@@ -222,6 +222,34 @@
 
 ## § Next (P2)
 
+### T-030 — Icon reliability: bounded retries + per-app cache clearing — `P2` — `BLOCKED`
+- **Blocked on:** the owner's answers to the five questions in
+  [`ICON_RELIABILITY_RESEARCH.md`](ICON_RELIABILITY_RESEARCH.md) §7. **No code has been written**,
+  at the owner's request (2026-10-18).
+- **Problem (measured — the doc's appendix):** the retained log shows 117 fallbacks for WhatsApp
+  Desktop (its packaged/MSIX exe has *no* icon resource to extract — a hard failure, retried every
+  poll) and 68 for Antigravity IDE inside one 13-minute window that *no* log line explains.
+  `icons.get_icon_url` runs on **every** tick, so a failing app is re-extracted and re-uploaded
+  every `poll_interval` (5 s) with no backoff, no attempt count and no negative cache — "3 retries"
+  already happen accidentally, unlimited and invisible.
+- **Deliverable (the doc's S1–S3; each ships alone):**
+  1. **S1** — failure logging with stage + reason at WARNING; stamp `presence.start_epoch` at
+     detection so a slow fetch cannot shift Discord's timer; atomic `icons._save_cache`; memoize
+     `_validate_icon_url`'s verdict so an untrusted override URL is not probed every tick.
+  2. **S2** — a 3-attempt ladder in `icons.py` (1 s / 3 s gaps, ~6 s per-tick budget, an escalating
+     60 s → 5 min → 30 min park; hard failures park immediately) plus an optional `iconState` field
+     in the `app` event.
+  3. **S3** — `icons.clear_icon_cache(exe_paths)` + `icons.cached_icons()` → the protocol pair
+     (`clear_icon_cache` / `get_icon_cache`) → shell `clear_icon_cache(exe_keys)` +
+     `icon_cache_listing()` → Status-card **Refresh icon**, a searchable per-app list in the Logs
+     dialog, and `invalidateAppIcon()` in `src/lib/icons.ts`.
+- **Acceptance:** an app whose upload fails shows the default for at most one ladder rung and then
+  recovers to the real icon without an app switch; a per-app clear refreshes exactly that app's icon
+  within one tick and leaves the other entries alone; the log names the failing stage; the Discord
+  timer matches the pane's "Detected at".
+- **Folds in:** `T-013` (per-app icon refresh). Option `S5`/`E1` (packaged-app icons via the
+  Explorer route) stays gated on the `T9` probe.
+
 ### T-003 — Single-source the version string — `P2` — `TODO` *(fixes B-3)*
 - **Problem:** `updater.__version__`, README badges, and the git tag are all independent.
 - **Deliverable:** One canonical version (e.g. `__version__` in `updater.py` or a
@@ -292,7 +320,8 @@
 ## § Backlog / Ideas (not yet prioritized)
 
 - T-012 — Tray tooltip should reflect the currently broadcast app.
-- T-013 — Per-app icon refresh button in Settings (currently only a global cache reset).
+- T-013 — *(`SUPERSEDED` by `T-030`, 2026-10-18)* Per-app icon refresh button in Settings
+  (currently only a global cache reset).
 - T-014 — Accessibility/UX: keyboard navigation in the Settings tabs. *(subsumed by T-020 —
   the rewrite requires keyboard-only completion of onboarding and Settings)*
 - T-015 — i18n / localized taglines for the built-in table.

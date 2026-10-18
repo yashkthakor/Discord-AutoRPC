@@ -1,7 +1,7 @@
 # STATE.md — Current Project Snapshot
 
 > **Volatile file.** Overwrite freely. It answers: *"where are we right now?"*
-> Last updated: **2026-10-18** · Updated by: **engine seam landed, verified and committed — `1795dce` (shell) + `2f07b9f` (seam + docs)**
+> Last updated: **2026-10-18** · Updated by: **engine seam + README rewrite committed; the icon-reliability proposal drafted (`ICON_RELIABILITY_RESEARCH.md`, `T-030`) — docs only**
 > Keep it short enough to read in 60 seconds.
 
 ---
@@ -43,6 +43,11 @@ falling back to the mock.
 - **Still-open owner questions:** **Q2** (is a WebView2 runtime dependency acceptable for end
   users — this machine has `155.0.4283.62`), **Q7** (tray single- vs double-click; today
   left-click opens Settings, `TR-14`), **Q8** (code-signing budget, `T-017`).
+- **Awaiting owner sign-off:** `ICON_RELIABILITY_RESEARCH.md` — icon-fetch retries (a 3-attempt
+  ladder with an escalating park) and per-app icon cache clearing, with the measurement plan for
+  the tradeoffs. **Docs only; no code** (`T-030`, blocked on the doc's five questions). The
+  appendix already measured the current log: 117 WhatsApp fallbacks (its MSIX exe has no icon
+  resource — retries cannot fix it) and 68 Antigravity fallbacks with no explaining log line.
 - **Run it:**
   - Dev shell: `cd desktop && npm run tauri dev` (spawns the engine; it finds `main.py` by walking
     up from the dev binary).
@@ -215,6 +220,7 @@ The shell's window geometry lives in `%APPDATA%\com.yashkthakor.discordautorpc\.
 | `DECISIONS.md` | Append-only decision log. `D-001`…`D-019` = Python/engine era; `D-020`…`D-042` = G0; `D-043`…`D-053` = Phase 1; `D-054`…`D-056` = owner-review fixes; `D-057` = the engine seam (supersedes `D-050`'s mock default). Next free id `D-058`. |
 | `GUI_HANDOFF_TAURI_REACT.md` | The rewrite spec: §4 parity inventory (stable IDs), §11 gates, §13 open questions. **§0.1 is authoritative.** |
 | `desktop/COMPONENT_MAP.md` | §4 ID → component mapping, `P1`/`P2` markers, deferral table. Kept in step with the code. |
+| `ICON_RELIABILITY_RESEARCH.md` | **Draft for owner review (`T-030`):** why an icon falls back to the default, the retry ladder + per-app cache clearing proposals, and the tradeoffs to measure. No code yet, by request. |
 | `RUST_MIGRATION_RESEARCH.md` | Deprioritized: the full-Rust-rewrite research. Reference only. |
 
 > The Python engine's public surface grew by four additive helpers (`detector.is_discord_running`,
