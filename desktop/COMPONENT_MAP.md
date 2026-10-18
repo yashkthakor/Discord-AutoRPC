@@ -29,7 +29,7 @@
 | `SH-3` | `src-tauri/src/windows.rs::open_settings` (980×700, min 820×560) + `tauri-plugin-window-state`, restored **size / position / maximized only** — `decorated`, `visible` and `fullscreen` are the app's to decide (`D-055`) | `P1` |
 | `SH-4` | hidden start → `src/lib/boot.ts` → `invoke("ready")` → `src-tauri/src/windows.rs::apply_theme` + `show_with_theme` (see `D-046`) | `P1` |
 | `SH-5` | `tauri-plugin-single-instance` callback in `src-tauri/src/main.rs` → `windows::open_settings` | `P1` |
-| `SH-6` | hidden window while broadcasting is paused (tray stays up) | `P2` — `T-022` (needs the sidecar) |
+| `SH-6` | hidden window while broadcasting is paused (tray stays up) — **not built**: the sidecar exists now (`D-057`), the hiding itself is its own task | `P2` — `T-027` |
 | `SH-7` | `src-tauri/src/tray.rs::sync` (tooltip + menu text follow engine state) | `P1` |
 | `SH-8` | `src/panes/StatusPane.tsx` offline/unconfigured states + `toast(…, { kind: "error" })` | `P1` |
 | `SH-9` | windows are owned by `windows.rs`; closing Settings **hides** it and the process stays in the tray (`main.rs` close guard + `ExitRequested` guard, `D-054`), so `TR-13` is the only full exit | `P1` |
@@ -104,7 +104,7 @@
 | `T-3` | `TaglinePreviewChip` inside the add popover | `P1` |
 | `T-4` | `normalizeExeKey` (shared) | `P1` |
 | `T-5` | `InsetList` remove + undo toast | `P1` |
-| `T-6` | `Built-in taglines` group fed by `invoke("get_built_ins")`. **Data is `P2`**: the table lives in `detector.py::_BUILTIN_TAGLINES` and is served by the engine (`D-051`); the shell returns an empty map and the group says so | `P1`/`P2` |
+| `T-6` | `Built-in taglines` group fed by `invoke("get_built_ins")`, which answers from the engine's `builtins` line cached in `sidecar.rs` — the table stays single-sourced in `detector.py::_BUILTIN_TAGLINES` (`D-057`) | `P1` |
 | `T-7` | `PrecedenceNote` one-liner above the list | `P1` |
 | `T-8` | character counter, warns past 128 | `P1` |
 
@@ -188,7 +188,7 @@
 | `SEM-3` | replaced by autosave — `src/state/config.ts::updateConfig()` (optimistic + rollback) is the single commit helper | `P1` |
 | `SEM-4` | tray ignore and pane write the same store (`ignore_store.rs`) | `P1` |
 | `SEM-5` | autostart toggle writes then re-reads the OS state | `P1` |
-| `SEM-6` | every mutation emits `config-changed`; detector rebuild is `P2` — `T-022` | `P1`/`P2` |
+| `SEM-6` | every mutation emits `config-changed`, and every config write is followed by `reload_config` so the engine rebuilds its detector from the new file (`D-057`) | `P1` |
 | `SEM-7` | `config-changed` handler merged into the store without clobbering focused fields | `P1` |
 | `SEM-8` | per-field validation; an invalid App ID never blocks another field | `P1` |
 
@@ -198,7 +198,7 @@
 |---|---|
 | `UI-1` no emoji/glyph icons | enforced by review; `lucide-react` icons only |
 | `UI-2` no glass/gradients | `src/styles/tokens.css` (solid values only) |
-| `UI-3` native decorations | `tauri.conf.json` (`"decorations": true`) |
+| `UI-3` native decorations | **superseded by `D-055`** (owner directive): all three windows are `decorations(false)` with frontend-drawn chrome, and `windows.rs::strip_caption` removes the Win32 caption tao keeps |
 | `FONT-1` bundled fonts | `@fontsource-variable/inter`, `@fontsource/cascadia-code` |
 | `THEME-1…6` | `src/lib/theme.ts`, `src-tauri/src/prefs.rs`, `tokens.css`, `windows.rs` |
 | `A11Y-1…4` | focus rings, `role="switch"`, `aria-label` on icon buttons, `aria-live` |
@@ -215,11 +215,11 @@
 | `L-11` detection digest | `D-038` — deferred at G0 | owner |
 | "why this tagline?" disclosure | `A15` — deferred at G0 | owner |
 | Mica / vibrancy | `D-022` — optional later | owner |
-| `SH-6` dormant tray hiding | needs the real sidecar | `T-022` |
+| `SH-6` dormant tray hiding | the sidecar is real now (`D-057`); the hiding itself is its own task | `T-027` |
 | Native save dialog for Export / Export logs | keeps the plugin surface minimal until the engine seam is real; exports land in `<data dir>\exports\` and the toast names the path | `T-024` (`D-051`) |
 | Tray "update available" item (`TR-4`) | needs a real update check; the version header is already there | `T-024` (`D-051`) |
-| Built-in tagline list (`T-6`) | the table lives in `detector.py`; copying it into Rust would create a second source of truth | `T-022` (`D-051`) |
-| SteamGridDB "Test key" (`G-11`) | needs an HTTP call that belongs on the engine side | `T-022` (`D-051`) |
-| Icon extraction / upload / presence itself | the engine owns GDI, uploads and the Discord IPC connection | `T-022` (`D-051`) |
+| Built-in tagline list (`T-6`) | **delivered** by `D-057`: the engine serves the table over the protocol, so it stays single-sourced in `detector.py` | `D-057` |
+| SteamGridDB "Test key" (`G-11`) | an HTTP call that belongs on the engine side; the seam exists (`D-057`), the command does not | `T-029` |
+| Icon extraction / upload / presence itself | **delivered** by `D-057`: the engine owns GDI, uploads and the Discord IPC connection, driven by `sidecar.rs` | `D-057` |
 | `config.json` defaults mirrored in Rust | Phase-1 duplication, tracked so it cannot rot silently | `T-025` (`D-053`) |
 | Verify `rename.html` / `onboarding.html` on a real build | routing is by entry point now, not by hash | `T-023` |

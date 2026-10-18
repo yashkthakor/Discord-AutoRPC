@@ -238,6 +238,15 @@ _KEYWORD_TAGLINES: list[tuple[list[str], str]] = [
 ]
 
 
+def built_in_taglines() -> dict[str, str]:
+    """A copy of the shipped table, so a caller cannot edit it in place.
+
+    The Tauri shell mirrors this read-only (`T-022`) rather than keeping a second copy of the
+    same 58 strings, which would silently drift away from this one.
+    """
+    return dict(_BUILTIN_TAGLINES)
+
+
 def resolve_tagline(app: AppInfo, config: dict) -> str:
     """
     Determine a contextual tagline for the details line.
@@ -374,6 +383,23 @@ _DISCORD_EXES = {"discord.exe", "discordcanary.exe", "discordptb.exe", "discordd
 
 def _is_discord(app: AppInfo) -> bool:
     return app.exe_name.lower() in _DISCORD_EXES
+
+
+def is_discord_running() -> bool:
+    """True while a Discord desktop client is on the process list.
+
+    Lives here rather than in an entry point because both entry points need it — the tray
+    build's poll loop and the headless engine (`engine_stdio.py`) — and this module already
+    knows Discord's exe names. `main._is_discord_running` used to be a copy of this.
+    """
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = proc.info.get("name")
+            if name and name.lower() in _DISCORD_EXES:
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
 
 
 def _is_process_alive(app: AppInfo) -> bool:

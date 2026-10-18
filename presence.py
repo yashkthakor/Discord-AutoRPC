@@ -80,6 +80,15 @@ class PresenceManager:
             return True
         return self.connect()
 
+    @property
+    def connected(self) -> bool:
+        """Whether the RPC handshake has completed.
+
+        Read-only on purpose: the desktop shell *asks* the engine for the Discord status
+        instead of deciding it itself (`T-022`), and this is where that answer comes from.
+        """
+        return self._connected
+
     # ------------------------------------------------------------------
     # Start-time tracking
     # ------------------------------------------------------------------
@@ -97,6 +106,14 @@ class PresenceManager:
         epoch = int(time.time())
         self._start_times[key] = {"pid": pid, "start_epoch": epoch}
         return epoch
+
+    def start_epoch(self, exe_path: str, pid: int) -> int:
+        """The same start time `update()` hands to Discord.
+
+        The desktop shell draws a ticking timer, and it has to tick from the value Discord was
+        actually given rather than from its own clock, or the two visibly drift apart (`T-022`).
+        """
+        return self._get_start_time(exe_path, pid)
 
     # ------------------------------------------------------------------
     # Update / Clear

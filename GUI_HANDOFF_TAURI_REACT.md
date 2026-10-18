@@ -568,7 +568,7 @@ Names marked ✔ are unchanged from the table above.
 | `list_overrides` / `upsert_override` / `delete_override` | `set_config {overrides}` / **`rename_app`** / `remove_override` | Rows are edited as a map through `set_config`; `rename_app` exists because the tray and the rename window need the instant-apply path (`R-7`). |
 | `list_taglines` / `upsert_tagline` / `delete_tagline` | `set_config {taglines}` | Same document, same reason. |
 | `list_ignored` / `add_ignored` / `remove_ignored` | `get_ignored` / `ignore_app` / `unignore_app` | ✔ in shape, and now writing **one** store (`D-047`). |
-| `get_builtin_taglines` / `get_default_ignores` | `get_built_ins` | Empty until the engine serves the table (`D-051`); the ignore defaults arrive inside `get_ignored`. |
+| `get_builtin_taglines` / `get_default_ignores` | `get_built_ins` | Served by the engine over the protocol and cached in `sidecar.rs` (`D-057`, closes `R-3`); the ignore defaults arrive inside `get_ignored`. |
 | `get_current_app` | part of `get_state` | It only changes with state, and it changes with `state` events. |
 | `test_connection` ✔ | ✔ | Answers with `{ok, detail, appName}` — `detail` is the reason a failed handshake gives, so the UI never invents copy (`ERR-2`). |
 | `rename_active_app` / `ignore_active_app` / `set_paused` | `rename_app` / `ignore_app` / `pause` + `resume` | Two explicit verbs beat a boolean parameter at the call site. |
@@ -576,15 +576,16 @@ Names marked ✔ are unchanged from the table above.
 | `export_logs` ✔ / `clear_icon_cache` ✔ / `check_for_updates` ✔ / `open_url` ✔ / `open_log_file` / `open_log_folder` | ✔ + `export_config`, `open_log`, `open_log_folder`, `ui_log`, `copy_text`, `app_icon_url`, `reset_config`, `close_window`, `open_settings`, `open_onboarding`, `open_rename` | Adds: window control (all windows are Rust-owned — `D-049`), clipboard and icon URL, and `ui_log` so a frontend failure is visible in the same log as everything else. |
 | `get_ui_prefs` / `set_ui_prefs` | `get_prefs` / **`set_prefs {appearance}`** | ✔ in shape, one field wide. |
 | `set_window_theme` ✔ | ✔ | Called per window; `system` passes `None` so the OS keeps deciding (`D-046`). |
-| `restart_engine` | — | Needs an engine to restart (`T-022`). |
+| `restart_engine` | — | Not implemented by choice: `sidecar.rs` spawns the engine once and *reports* a dead one (exit code, toast, offline state) instead of restarting it silently (`D-057`). |
 | *(new)* window chrome | `minimize_window`, `toggle_maximize`, `close_window`, plus the **`window-state`** event (`{maximized}`) | Added by `D-055`: the windows are frameless, so the controls are commands rather than JS plugin calls (which keeps `client.ts` the only `@tauri-apps/api` importer), and the maximize glyph can only come from Rust, which is the side that knows the OS state. |
 
 Events: `status-changed` + `app-changed` are one **`state`** event carrying the whole
-`EngineState`, `log-line` is **`log`**, `update-available` and `engine-error` do not exist yet
-(`D-051`); `config-changed` and `ui-prefs-changed` are ✔ as proposed. **`toast`** is wired end to
-end but only the mock backend emits it today — the shell has no engine-initiated feedback to
-relay until `T-022`. **`window-state`** is new (`D-055`): the main window's maximized flag after
-every resize, so the custom chrome can show maximize or restore.
+`EngineState`, `log-line` is **`log`**; `config-changed` and `ui-prefs-changed` are ✔ as
+proposed. Since `D-057` the real engine also produces **`toast`** (its own feedback, e.g. a dead
+engine), and writes `update-available` into `state.updateTag` (nothing consumes that yet —
+`T-024`). A crash is reported as an ERROR log line plus a toast; `engine-error` was never built.
+**`window-state`** is new (`D-055`): the main window's maximized flag after every resize, so the
+custom chrome can show maximize or restore.
 
 ---
 
@@ -806,7 +807,7 @@ the checkbox that quietly disappears.
 
 | # | Status | Question | Why you need it |
 |---|---|---|---|
-| **Q1** | **ANSWERED — `D-043`** | **Engine location:** Tauri + Python sidecar (Option A), or Rust engine (Option B)? | **Option A.** Tauri shell + the existing Python engine as a stdio JSON-lines sidecar. The frontend is written against the IPC contract only, so a later move to a full Rust engine cannot force a UI rewrite. Phase-1 shell runs a mock until `T-022` adds `--engine-stdio`. |
+| **Q1** | **ANSWERED — `D-043`** | **Engine location:** Tauri + Python sidecar (Option A), or Rust engine (Option B)? | **Option A.** Tauri shell + the existing Python engine as a stdio JSON-lines sidecar. The frontend is written against the IPC contract only, so a later move to a full Rust engine cannot force a UI rewrite. **Delivered** in `T-022`: `main.py --engine-stdio` + `sidecar.rs` (`D-057`). |
 | **Q2** | **OPEN** | Is a **WebView2** runtime requirement acceptable on the machines you support? | Gates the entire Tauri choice (`RSK-5`). **This dev machine has it** (`155.0.4283.62`, seen under `HKLM\SOFTWARE\WOW6432Node\...\{F3017226-...}`), so the runtime question is about *end users*, not about whether the shell can run here. |
 | **Q3** | **ANSWERED — `D-048`** | App ID length: the check allows **17–21** digits but the error says **17–20**. Which is correct? | **17–21**, in the check *and* the copy. Implemented in `desktop/src/lib/validation.ts` and `config_file::is_valid_app_id`; the Python string is left alone (`B-12`). |
 | **Q4** | **ANSWERED — `D-044`** | Onboarding **Cancel** currently exits the app. Keep that, or offer "continue without connecting"? | **"Continue without connecting"** — the button reads **Set up later**, the app keeps running unconfigured, and the tray stays functional. |

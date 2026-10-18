@@ -1,8 +1,13 @@
 """
 main.py — Discord AutoRPC entry point.
 
-Runs a system-tray icon (pystray) with a background thread that
+Runs a system-tray icon (PyQt6) with a background thread that
 polls the foreground window and updates Discord Rich Presence.
+
+`--engine-stdio` is a second, headless entry point: the Tauri shell in `desktop/` spawns this
+file with that flag and drives the same detection pipeline over JSON lines on stdin/stdout
+(see `engine_stdio.py`). That branch runs before the Qt imports below, so it never loads
+PyQt6 and never takes the tray app's single-instance mutex — the two can coexist.
 """
 
 import json
@@ -18,6 +23,14 @@ from pathlib import Path
 import io
 import webbrowser
 
+# Headless engine mode (`T-022`). Handled *here*, above the Qt imports, so the sidecar the
+# desktop shell spawns never loads PyQt6 — and above the single-instance mutex, which belongs
+# to the tray app this process deliberately is not.
+if "--engine-stdio" in sys.argv:
+    from engine_stdio import run
+
+    sys.exit(run())
+
 import psutil
 import win32api
 import win32event
@@ -28,7 +41,7 @@ from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from config import load_config, is_configured, CONFIG_PATH, get_data_dir
-from detector import Detector, AppInfo, load_ignore_list, save_ignore_list
+from detector import Detector, AppInfo, is_discord_running, load_ignore_list, save_ignore_list
 from gui import (
     run_onboarding_wizard,
     open_settings_gui,
@@ -143,21 +156,6 @@ class JsonReloader:
         return self._config
 
 
-
-
-def _is_discord_running() -> bool:
-    """Check if any Discord desktop client is currently running."""
-    discord_names = {"discord.exe", "discordcanary.exe", "discordptb.exe", "discorddevelopment.exe"}
-    for proc in psutil.process_iter(["name"]):
-        try:
-            name = proc.info.get("name")
-            if name and name.lower() in discord_names:
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return False
-
-
 class TrayBridge(QObject):
     set_visible_signal = pyqtSignal(bool)
     show_settings_signal = pyqtSignal()
@@ -202,7 +200,7 @@ def _poll_loop(
         poll_interval = config.get("poll_interval", 5)
         auto_close = config.get("auto_close_with_discord", True)
 
-        discord_running = _is_discord_running()
+        discord_running = is_discord_running()
 
         if not discord_running:
             if auto_close:
@@ -225,7 +223,7 @@ def _poll_loop(
                         bridge.set_visible_signal.emit(True)
                         bridge.show_settings_signal.emit()
 
-                    if _is_discord_running():
+                    if is_discord_running():
                         logger.info("Discord detected! Restoring system tray icon and reconnecting Rich Presence...")
                         bridge.set_tooltip_signal.emit("Discord AutoRPC")
                         bridge.set_visible_signal.emit(True)
@@ -469,7 +467,7 @@ def main() -> None:
     presence = PresenceManager(app_id)
 
     is_startup = "--startup" in sys.argv
-    discord_running = _is_discord_running()
+    discord_running = is_discord_running()
     auto_close = config.get("auto_close_with_discord", True)
     start_dormant = is_startup and not discord_running and auto_close
 
