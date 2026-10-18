@@ -1,0 +1,18 @@
+# Build output and dependencies — never committed.
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Rust
+*.pdb
+
+# Local run artifacts (the shell's data dir can be the repo root while developing).
+ui_prefs.json
+exports/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log
+!autorpc.log.example

@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "The React UI talks only to its own commands. Two core:window permissions are needed because Tauri's own drag-region script (not our code) invokes start_dragging on mousedown and internal_toggle_maximize on double-click, so the frameless chrome can be dragged and maximized (D-055).",
+  "windows": ["settings", "onboarding", "rename"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

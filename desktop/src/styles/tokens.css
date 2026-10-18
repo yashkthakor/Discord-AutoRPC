@@ -1,0 +1,156 @@
+/* =============================================================================
+   tokens.css — the ONLY place colours are defined (D-026 / §8.1 of the handoff).
+
+   Rule 1: every colour is a CSS variable. Components never hard-code a colour.
+   Rule 2: cascade is exactly —
+             light on :root
+             dark under @media (prefers-color-scheme: dark) guarded with
+                  :root:not([data-theme="light"])
+             dark again under :root[data-theme="dark"]
+   Rule 3: `System` removes data-theme entirely, so the media query wins and an
+           OS change is followed live (THEME-1).
+   Rule 4: `accent` is a single token. Brand blurple (#5865F2) is a one-line swap
+           here, but the text variants must then be re-checked for contrast.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* --- surfaces ------------------------------------------------------------ */
+  --bg-window: #f5f5f7;
+  --bg-sidebar: #eaeaec;
+  --bg-group: #ffffff;
+  --bg-input: #f0f0f2;
+  --bg-hover: #efeff2;
+  --bg-sunken: #f0f0f2;
+  --separator: #dcdce0;
+  --separator-strong: #c7c7cc;
+
+  /* --- text ---------------------------------------------------------------- */
+  --text-primary: #1d1d1f;
+  --text-secondary: #636366;
+
+  /* --- accents ------------------------------------------------------------- */
+  --accent: #0071e3; /* fills with white text: 4.70:1 */
+  --accent-text: #0066cc; /* 5.57:1 on bg.group */
+  --danger-fill: #d70015; /* white text: 5.38:1 */
+  --danger-text: #d70015; /* 5.38:1 on bg.group */
+  --success-text: #1e7b34; /* 5.33:1 on bg.group */
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
+  --accent-hover: color-mix(in srgb, var(--accent) 88%, #000);
+  --accent-active: color-mix(in srgb, var(--accent) 78%, #000);
+  --danger-hover: color-mix(in srgb, var(--danger-fill) 88%, #000);
+  --danger-active: color-mix(in srgb, var(--danger-fill) 78%, #000);
+
+  /* --- derived (still tokens; components stay colour-free) ----------------- */
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-soft-hover: color-mix(in srgb, var(--accent) 22%, transparent);
+  --focus-ring: var(--accent);
+  --shadow-popover:
+    0 10px 30px rgb(0 0 0 / 16%), 0 1px 3px rgb(0 0 0 / 10%);
+  --shadow-dialog: 0 18px 50px rgb(0 0 0 / 24%), 0 1px 3px rgb(0 0 0 / 12%);
+  --scrim: rgb(0 0 0 / 28%);
+
+  /* --- geometry (A9 / D-028) ---------------------------------------------- */
+  --radius-card: 10px;
+  --radius-control: 6px;
+  --radius-pill: 999px;
+
+  /* --- type (A9 / D-028) --------------------------------------------------- */
+  --font-ui: "Inter Variable", "Segoe UI Variable Text", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+  --fs-title: 20px;
+  --fs-section: 15px;
+  --fs-body: 13px;
+  --fs-caption: 12px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* --- spacing: 4px grid --------------------------------------------------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* --- motion (8.4): 120–200ms ease-out, nothing else --------------------- */
+  --dur-fast: 120ms;
+  --dur: 160ms;
+  --dur-slow: 200ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* --- layout -------------------------------------------------------------- */
+  --sidebar-width: 208px;
+  --content-width: 680px;
+  --control-height: 28px;
+}
+
+/* Dark, via the OS. Guarded so an explicit in-app "Light" choice always wins. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg-window: #1e1e1e;
+    --bg-sidebar: #262628;
+    --bg-group: #2c2c2e;
+    --bg-input: #1c1c1e;
+    --bg-hover: #333335;
+    --bg-sunken: #141414;
+    --separator: #38383a;
+    --separator-strong: #48484a;
+
+    --text-primary: #f5f5f7;
+    --text-secondary: #a1a1a6;
+
+    --accent: #0a6fe0;
+    --accent-text: #409cff;
+    --danger-fill: #d93a31;
+    --danger-text: #ff6961;
+    --success-text: #32d74b;
+    --accent-hover: color-mix(in srgb, var(--accent) 88%, #fff);
+    --accent-active: color-mix(in srgb, var(--accent) 78%, #fff);
+    --danger-hover: color-mix(in srgb, var(--danger-fill) 88%, #fff);
+    --danger-active: color-mix(in srgb, var(--danger-fill) 78%, #fff);
+
+    --shadow-popover:
+      0 10px 30px rgb(0 0 0 / 50%), 0 1px 3px rgb(0 0 0 / 40%);
+    --shadow-dialog: 0 18px 50px rgb(0 0 0 / 60%), 0 1px 3px rgb(0 0 0 / 45%);
+    --scrim: rgb(0 0 0 / 48%);
+  }
+}
+
+/* Dark, via an explicit in-app choice. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-window: #1e1e1e;
+  --bg-sidebar: #262628;
+  --bg-group: #2c2c2e;
+  --bg-input: #1c1c1e;
+  --bg-hover: #333335;
+  --bg-sunken: #141414;
+  --separator: #38383a;
+  --separator-strong: #48484a;
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1a6;
+
+  --accent: #0a6fe0;
+  --accent-text: #409cff;
+  --danger-fill: #d93a31;
+  --danger-text: #ff6961;
+  --success-text: #32d74b;
+  --accent-hover: color-mix(in srgb, var(--accent) 88%, #fff);
+  --accent-active: color-mix(in srgb, var(--accent) 78%, #fff);
+  --danger-hover: color-mix(in srgb, var(--danger-fill) 88%, #fff);
+  --danger-active: color-mix(in srgb, var(--danger-fill) 78%, #fff);
+
+  --shadow-popover:
+    0 10px 30px rgb(0 0 0 / 50%), 0 1px 3px rgb(0 0 0 / 40%);
+  --shadow-dialog: 0 18px 50px rgb(0 0 0 / 60%), 0 1px 3px rgb(0 0 0 / 45%);
+  --scrim: rgb(0 0 0 / 48%);
+}

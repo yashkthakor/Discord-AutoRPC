@@ -18,6 +18,11 @@ config.json
 icon_cache.json
 ignore_list.json
 autorpc.log*
+# Written by the Tauri shell, and by the Python build in portable mode.
+# In a dev run the data dir *is* the repo root, so these land here too.
+ui_prefs.json
+exports/
+portable.txt
 
 # Test artifacts
 sample_*.png
