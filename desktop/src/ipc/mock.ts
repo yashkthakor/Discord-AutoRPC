@@ -9,7 +9,17 @@
  * Everything here is obviously fake: app names, log lines, icons.
  */
 
-import type { Appearance, AppInfo, Config, EngineState, IgnoredListing, LogLine, Prefs } from "./types";
+import type {
+  Appearance,
+  AppInfo,
+  Config,
+  EngineState,
+  IconCacheEntry,
+  IconStatus,
+  IgnoredListing,
+  LogLine,
+  Prefs,
+} from "./types";
 import { cmd, evt } from "./types";
 
 type Handler = (payload: unknown) => void;
@@ -75,6 +85,7 @@ const DEMO_APPS: Array<Omit<AppInfo, "startedAtMs">> = [
     displayName: "Google Chrome",
     tagline: "Browsing YouTube",
     iconUrl: null,
+    icon: { state: "parked", attempts: 3, retryAtMs: Date.now() + 20 * 60_000, reason: "no icon resource to extract" },
     ignored: false,
   },
   {
@@ -99,6 +110,22 @@ const LOG_SAMPLES: Array<[LogLine["level"], string, string]> = [
   ["ERROR", "autorpc.presence", "Discord IPC closed unexpectedly; reconnect scheduled in 15s"],
 ];
 
+/** The mock's `icon_cache.json` — same shape and lowercase path keys the engine writes (T-030). */
+let iconCache: IconCacheEntry[] = [
+  {
+    path: "c:\\program files\\google\\chrome\\application\\chrome.exe",
+    url: "https://cdn.discordapp.com/embed/avatars/1.png",
+  },
+  {
+    path: "c:\\program files\\microsoft vs code\\code.exe",
+    url: "https://cdn.discordapp.com/embed/avatars/2.png",
+  },
+  {
+    path: "c:\\users\\yash\\appdata\\roaming\\spotify\\spotify.exe",
+    url: "https://cdn.discordapp.com/embed/avatars/3.png",
+  },
+];
+
 let state: EngineState = {
   version: "0.2.0-mock",
   engine: "active",
@@ -108,6 +135,7 @@ let state: EngineState = {
   app: null,
   recentApps: RECENT,
   autostartEnabled: true,
+  iconCache: [...iconCache],
 };
 
 let config: Config = structuredClone(DEFAULT_CONFIG);
@@ -155,6 +183,11 @@ function writePrefs(prefs: Prefs): void {
 function pushState(patch: Partial<EngineState>): void {
   state = { ...state, ...patch };
   emit(evt.state, state);
+}
+
+/** What the Status pane shows right after a mock icon clear (T-030). */
+function retryingIcon(): IconStatus {
+  return { state: "pending", attempts: 1, retryAtMs: Date.now() + 5000, reason: null };
 }
 
 function emitLog(level: LogLine["level"], logger: string, message: string): void {
@@ -323,8 +356,21 @@ export async function mockInvoke<T>(command: string, args?: Record<string, unkno
       }) as T;
     }
 
-    case cmd.clearIconCache:
-      return 42 as T;
+    case cmd.getIconCache:
+      return structuredClone(iconCache) as T;
+
+    case cmd.clearIconCache: {
+      const requested = Array.isArray(a["exeKeys"])
+        ? (a["exeKeys"] as unknown[]).map((key) => String(key).toLowerCase())
+        : null;
+      const before = iconCache.length;
+      iconCache = requested ? iconCache.filter((row) => !requested.includes(row.path.toLowerCase())) : [];
+      pushState({
+        iconCache: [...iconCache],
+        ...(state.app ? { app: { ...state.app, icon: retryingIcon() } } : {}),
+      });
+      return (before - iconCache.length) as T;
+    }
 
     case cmd.resetConfig: {
       config = structuredClone(DEFAULT_CONFIG);

@@ -4,9 +4,12 @@
  * One list, one source of truth: `config.overrides`. Every row commits through
  * `set_override`-equivalent writes (we send the whole map) so the file can never be
  * left half-written (SEM-6 / B-10 was a non-atomic write in the Python build).
+ *
+ * The Icon cache section at the bottom clears resolved icons per app (T-030): a row
+ * clear resets the engine's retry ladder for that app, so the next poll fetches again.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pencil } from "lucide-react";
 import { Button, IconButton } from "@/components/Button";
 import { InsetList } from "@/components/InsetList";
@@ -14,8 +17,9 @@ import { TextField } from "@/components/Inputs";
 import { Popover } from "@/components/Overlay";
 import { toast } from "@/components/Toast";
 import { Card, Group } from "@/components/Structure";
-import type { Config, Override } from "@/ipc/types";
-import { useAppIcon } from "@/lib/icons";
+import { invoke } from "@/ipc/client";
+import { cmd, type Config, type IconCacheEntry, type Override } from "@/ipc/types";
+import { invalidateAppIcon, useAppIcon } from "@/lib/icons";
 import { normalizeExeKey, validateIconUrl } from "@/lib/validation";
 import { configStore, updateConfig } from "@/state/config";
 import { engineStore } from "@/state/engine";
@@ -119,8 +123,93 @@ export function AppNamesPane() {
           </ol>
         </Card>
       </Group>
+
+      <IconCacheGroup />
     </>
   );
+}
+
+/* ------------------------------------------------------------ icon cache --- */
+
+/**
+ * Per-app icon cache (T-030): what `icon_cache.json` holds right now, with a clear per
+ * row and a clear-all. A clear also resets the engine's retry ladder for that app, so the
+ * next poll fetches again — this is the "the icon is wrong, try it again" control.
+ */
+function IconCacheGroup() {
+  const engine = useStore(engineStore);
+
+  useEffect(() => {
+    // Ask for the authoritative listing; the answer arrives as a state update.
+    void invoke(cmd.getIconCache).catch(() => undefined);
+  }, []);
+
+  const clear = async (keys: string[] | null) => {
+    try {
+      const count = await invoke<number | null>(cmd.clearIconCache, keys ? { exeKeys: keys } : undefined);
+      if (keys) invalidateAppIcon(exeName(keys[0]));
+      else invalidateAppIcon();
+      // null means "forwarded to the engine" — its own toast reports the count.
+      if (count === null) return;
+      toast(
+        count > 0
+          ? `Cleared ${count} cached icon${count === 1 ? "" : "s"} — fetching again on the next poll.`
+          : "Nothing was cached — the engine fetches it again anyway.",
+        { kind: "success" },
+      );
+    } catch {
+      toast("Couldn't clear the icon cache.", { kind: "error" });
+    }
+  };
+
+  const entries = engine.iconCache;
+
+  return (
+    <Group
+      title="Icon cache"
+      description="Every icon the engine has resolved for an app. Clearing one makes the engine fetch that icon again on its next poll — use it when Discord is showing the wrong or default icon."
+    >
+      <InsetList<IconCacheEntry>
+        ariaLabel="Icon cache"
+        items={entries}
+        getKey={(row) => row.path}
+        filterText={(row) => row.path}
+        filterPlaceholder="Filter cached icons"
+        emptyTitle="No cached icons yet"
+        emptyHint="Icons are listed here after the engine fetches one for the first time."
+        removeLabel="Clear"
+        onRemove={(row) => void clear([row.path])}
+        renderRow={(row) => (
+          <>
+            <img className="inset-list__thumb" src={row.url} alt="" loading="lazy" />
+            <div className="inset-list__main">
+              <span className="inset-list__value">{exeName(row.path)}</span>
+              <span className="inset-list__key t-mono">{row.path}</span>
+            </div>
+          </>
+        )}
+        footnote={
+          <span
+            className="field__row"
+            style={{ justifyContent: "space-between", alignItems: "center", gap: "var(--sp-3)", flexWrap: "wrap" }}
+          >
+            <span className="t-caption">
+              {entries.length} cached icon{entries.length === 1 ? "" : "s"}
+            </span>
+            <Button variant="secondary" size="sm" disabled={entries.length === 0} onClick={() => void clear(null)}>
+              Clear all
+            </Button>
+          </span>
+        }
+      />
+    </Group>
+  );
+}
+
+/** `C:\App\Code.exe` → `code.exe`: the key the icon memo and the override map both use. */
+function exeName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return (parts[parts.length - 1] || path).toLowerCase();
 }
 
 /* ------------------------------------------------------------------ row --- */

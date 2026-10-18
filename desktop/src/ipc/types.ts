@@ -25,6 +25,30 @@ export type EngineStatus = "offline" | "waiting" | "active" | "paused";
 
 export type DiscordStatus = "connected" | "connecting" | "offline" | "not-running";
 
+/**
+ * Where the engine's icon resolution stands for the app on screen (T-030).
+ *
+ * `ok` — a URL is in hand (override, cache or a fresh upload). `pending` — the ladder is
+ * between attempts. `parked` — the three attempts failed and the default icon shows until
+ * `retryAtMs`, when the engine tries again.
+ */
+export interface IconStatus {
+  state: "ok" | "pending" | "parked";
+  /** Failures in the current attempt sequence (0–3). */
+  attempts: number;
+  /** When the next attempt happens, ms since epoch; null when none is scheduled. */
+  retryAtMs: number | null;
+  /** Why the last attempt failed, already human-readable; null when nothing failed. */
+  reason: string | null;
+}
+
+/** One row of `icon_cache.json`, as the App Names pane lists it (T-030). */
+export interface IconCacheEntry {
+  /** The exe path as cached — full path, lowercase. */
+  path: string;
+  url: string;
+}
+
 /** The app currently in the foreground, as the engine sees it. */
 export interface AppInfo {
   /** Normalized key: lowercase, `.exe` suffix. Never display this raw without a fallback. */
@@ -35,6 +59,8 @@ export interface AppInfo {
   /** Resolved tagline, or null when there is none (Status pane shows the automatic value). */
   tagline: string | null;
   iconUrl: string | null;
+  /** The engine's icon retry ladder; absent on older engines and on the mock (T-030). */
+  icon?: IconStatus | null;
   /** Milliseconds since epoch. The engine must send ms, not seconds (see T-022). */
   startedAtMs: number | null;
   ignored: boolean;
@@ -54,6 +80,8 @@ export interface EngineState {
   recentApps: string[];
   /** Real OS autostart state, not a config value (G-3). */
   autostartEnabled: boolean;
+  /** The engine's `icon_cache.json`, for the App Names pane (T-030). Empty until it answers. */
+  iconCache: IconCacheEntry[];
 }
 
 export interface Override {
@@ -158,6 +186,7 @@ export const cmd = {
   getBuiltIns: "get_built_ins",
   seedLogs: "seed_logs",
   clearIconCache: "clear_icon_cache",
+  getIconCache: "get_icon_cache",
   resetConfig: "reset_config",
   exportConfig: "export_config",
   exportLogs: "export_logs",

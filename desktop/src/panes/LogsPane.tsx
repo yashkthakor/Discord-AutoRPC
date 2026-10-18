@@ -28,6 +28,7 @@ import { Group } from "@/components/Structure";
 import { invoke } from "@/ipc/client";
 import { cmd, type LogLevel, type LogLine } from "@/ipc/types";
 import { formatClockTime } from "@/lib/format";
+import { invalidateAppIcon } from "@/lib/icons";
 import { clearLogView, logsStore } from "@/state/logs";
 import { useStore } from "@/state/store";
 
@@ -133,7 +134,10 @@ export function LogsPane() {
 
   const resetIconCache = async () => {
     try {
-      const count = await invoke<number>(cmd.clearIconCache);
+      const count = await invoke<number | null>(cmd.clearIconCache);
+      invalidateAppIcon();
+      // null means "forwarded to the engine" — its own toast reports the count.
+      if (count === null) return;
       toast(`Cleared ${count} cached icon${count === 1 ? "" : "s"}. Next detections will fetch fresh ones.`, {
         kind: "success",
       });

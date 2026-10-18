@@ -35,8 +35,8 @@ use tauri::{AppHandle, Emitter};
 
 use crate::service;
 use crate::state::{
-    AppInfo, DISCORD_CONNECTED, DISCORD_CONNECTING, DISCORD_NOT_RUNNING, DISCORD_OFFLINE,
-    ENGINE_OFFLINE, ENGINE_WAITING,
+    AppInfo, IconStatus, DISCORD_CONNECTED, DISCORD_CONNECTING, DISCORD_NOT_RUNNING,
+    DISCORD_OFFLINE, ENGINE_OFFLINE, ENGINE_WAITING,
 };
 
 /// `python.exe` is a console binary; without this every launch would flash a black window over
@@ -101,6 +101,11 @@ enum Event {
         kind: String,
         message: String,
     },
+    #[serde(rename = "icon_cache")]
+    IconCache {
+        #[serde(default)]
+        entries: Vec<WireIconEntry>,
+    },
     Fatal {
         message: String,
     },
@@ -108,6 +113,14 @@ enum Event {
 
 fn info_kind() -> String {
     "info".to_string()
+}
+
+/// One row of the engine's `icon_cache` listing.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireIconEntry {
+    path: String,
+    url: String,
 }
 
 /// The engine's `AppInfo`, which is the same shape the frontend already reads.
@@ -126,6 +139,8 @@ struct WireApp {
     #[serde(default)]
     icon_url: Option<String>,
     #[serde(default)]
+    icon: Option<IconStatus>,
+    #[serde(default)]
     started_at_ms: Option<u64>,
     #[serde(default)]
     ignored: bool,
@@ -140,6 +155,7 @@ impl From<WireApp> for AppInfo {
             display_name: wire.display_name,
             tagline: wire.tagline,
             icon_url: wire.icon_url,
+            icon: wire.icon,
             started_at_ms: wire.started_at_ms,
             ignored: wire.ignored,
         }
@@ -440,6 +456,17 @@ fn apply(app: &AppHandle, event: Event) {
             let _ = app.emit("toast", json!({ "kind": kind, "message": message }));
         }
 
+        Event::IconCache { entries } => {
+            let rows = entries
+                .into_iter()
+                .map(|row| crate::state::IconCacheEntry {
+                    path: row.path,
+                    url: row.url,
+                })
+                .collect();
+            service::set_icon_cache(app, rows);
+        }
+
         Event::Fatal { message } => service::ui_log(
             app,
             "ERROR",
@@ -481,6 +508,22 @@ pub fn set_paused(paused: bool) {
 /// settings lands on the next poll instead of on the engine's next mtime check.
 pub fn reload_config() {
     send(json!({ "cmd": "reload_config" }));
+}
+
+/// Drop cached icons — all of them, or just the given exe paths — and reset those apps'
+/// retry ladders. The refreshed listing and the count come back as events (`T-030`).
+pub fn clear_icon_cache(exe_keys: Option<Vec<String>>) {
+    send(json!({ "cmd": "clear_icon_cache", "exePaths": exe_keys }));
+}
+
+/// Ask for the current `icon_cache.json` listing; it arrives as an `icon_cache` event.
+pub fn request_icon_cache() {
+    send(json!({ "cmd": "get_icon_cache" }));
+}
+
+/// Whether the engine process is up and past its `ready` line.
+pub fn is_connected() -> bool {
+    READY.load(Ordering::SeqCst)
 }
 
 /// Ask the engine to clear the presence and exit, and kill it only if it does not.
@@ -579,6 +622,33 @@ mod tests {
             Ok(Event::Toast { kind, message }) => {
                 assert_eq!(kind, "info");
                 assert_eq!(message, "hello");
+            }
+            other => panic!("unexpected: ok={}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn an_icon_cache_listing_is_an_event() {
+        let line = r#"{"type":"icon_cache","entries":[{"path":"C:\\Code.exe","url":"https://iili.io/x.png"}]}"#;
+        match parse(line) {
+            Ok(Event::IconCache { entries }) => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].path, r"C:\Code.exe");
+                assert_eq!(entries[0].url, "https://iili.io/x.png");
+            }
+            other => panic!("unexpected: ok={}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn an_app_line_carries_the_icon_ladder() {
+        let line = r#"{"type":"app","app":{"exe":"wa.exe","path":"C:\\Wa.exe","displayName":"WhatsApp","icon":{"state":"parked","attempts":3,"retryAtMs":123,"reason":"no icon resource to extract"}}}"#;
+        match parse(line) {
+            Ok(Event::App { app: Some(wire) }) => {
+                let icon = wire.icon.expect("icon status");
+                assert_eq!(icon.state, "parked");
+                assert_eq!(icon.attempts, 3);
+                assert_eq!(icon.retry_at_ms, Some(123));
             }
             other => panic!("unexpected: ok={}", other.is_ok()),
         }

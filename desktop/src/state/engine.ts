@@ -13,6 +13,7 @@ const EMPTY: EngineState = {
   app: null,
   recentApps: [],
   autostartEnabled: false,
+  iconCache: [],
 };
 
 export const engineStore = createStore<EngineState>(EMPTY);

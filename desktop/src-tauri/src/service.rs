@@ -14,8 +14,8 @@ use crate::ignore_store;
 use crate::paths;
 use crate::sidecar;
 use crate::state::{
-    AppInfo, EngineState, LogLine, Shared, DISCORD_CONNECTED, DISCORD_NOT_RUNNING, DISCORD_OFFLINE,
-    ENGINE_ACTIVE, ENGINE_PAUSED, ENGINE_WAITING,
+    AppInfo, EngineState, IconCacheEntry, LogLine, Shared, DISCORD_CONNECTED, DISCORD_NOT_RUNNING,
+    DISCORD_OFFLINE, ENGINE_ACTIVE, ENGINE_PAUSED, ENGINE_WAITING,
 };
 
 static NEXT_LOG_ID: AtomicU64 = AtomicU64::new(1);
@@ -100,6 +100,11 @@ pub fn clear_current_app(app: &AppHandle) {
             state.engine = ENGINE_WAITING.to_string();
         }
     });
+}
+
+/// Replace the cached-icon listing with the engine's answer (`T-030`).
+pub fn set_icon_cache(app: &AppHandle, entries: Vec<IconCacheEntry>) {
+    mutate(app, |state| state.icon_cache = entries);
 }
 
 /// Apply a rename to the app on screen right now, without waiting for a poll (R-7).

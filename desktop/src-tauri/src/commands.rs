@@ -26,7 +26,7 @@ use crate::paths;
 use crate::prefs::{self, Prefs};
 use crate::service;
 use crate::sidecar;
-use crate::state::{EngineState, LogLine};
+use crate::state::{EngineState, IconCacheEntry, LogLine};
 use crate::windows;
 
 #[derive(Clone, Debug, Serialize)]
@@ -270,25 +270,86 @@ pub fn export_logs() -> Result<Option<String>, String> {
     Ok(Some(target.display().to_string()))
 }
 
+/// Clear cached icons — all of them, or just the given exe paths (`T-030`).
+///
+/// With the engine running this is forwarded to it: it owns `icon_cache.json` while it
+/// runs (one writer per file) and resets those apps' retry ladders in the same place.
+/// `None` then means "forwarded" — the count arrives as the engine's own toast, and the
+/// refreshed listing as an `icon_cache` event.
 #[tauri::command]
-pub fn clear_icon_cache() -> Result<usize, String> {
+pub fn clear_icon_cache(exe_keys: Option<Vec<String>>) -> Result<Option<usize>, String> {
+    if sidecar::is_connected() {
+        sidecar::clear_icon_cache(exe_keys);
+        return Ok(None);
+    }
+
+    // No engine (the mock, or a failed start): edit the file directly, as the shell always did.
     let path = paths::icon_cache_path();
     let Some(raw) = paths::read_to_string(&path) else {
-        return Ok(0);
+        return Ok(Some(0));
     };
 
-    let count = serde_json::from_str::<Value>(&raw)
-        .ok()
-        .map(|value| match value {
-            Value::Object(map) => map.len(),
-            Value::Array(items) => items.len(),
-            _ => 0,
-        })
-        .unwrap_or(0);
+    let parsed = serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+    let Value::Object(map) = parsed else {
+        return Ok(Some(0));
+    };
 
-    std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete icon_cache.json: {e}"))?;
+    let Some(keys) = exe_keys else {
+        let count = map.len();
+        std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete icon_cache.json: {e}"))?;
+        return Ok(Some(count));
+    };
 
-    Ok(count)
+    let wanted: Vec<String> = keys.iter().map(|key| key.to_lowercase()).collect();
+    let mut kept = serde_json::Map::new();
+    let mut removed = 0usize;
+    for (key, value) in map {
+        if wanted.iter().any(|want| want == &key.to_lowercase()) {
+            removed += 1;
+        } else {
+            kept.insert(key, value);
+        }
+    }
+
+    let text = serde_json::to_string_pretty(&Value::Object(kept))
+        .map_err(|e| format!("Couldn't encode icon_cache.json: {e}"))?;
+    paths::write_atomic(&path, text.as_bytes())
+        .map_err(|e| format!("Couldn't write icon_cache.json: {e}"))?;
+
+    Ok(Some(removed))
+}
+
+/// The current icon-cache listing, for the App Names pane (`T-030`).
+///
+/// With the engine running this asks it to publish the real file — the answer arrives as
+/// an `icon_cache` event and lands in state — and returns what is known right now.
+/// Without one (the mock, or a failed start) it reads the file directly.
+#[tauri::command]
+pub fn get_icon_cache(app: AppHandle) -> Vec<IconCacheEntry> {
+    if sidecar::is_connected() {
+        sidecar::request_icon_cache();
+        return service::snapshot(&app).icon_cache;
+    }
+
+    let Some(raw) = paths::read_to_string(&paths::icon_cache_path()) else {
+        return Vec::new();
+    };
+
+    let mut rows: Vec<IconCacheEntry> = match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::Object(map)) => map
+            .into_iter()
+            .filter_map(|(path, url)| {
+                url.as_str().map(|url| IconCacheEntry {
+                    path,
+                    url: url.to_string(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    rows.sort_by(|a, b| a.path.cmp(&b.path));
+    rows
 }
 
 /// Report a UI-side failure into the log. Not in `cmd` — `src/ipc/client.ts` calls it by

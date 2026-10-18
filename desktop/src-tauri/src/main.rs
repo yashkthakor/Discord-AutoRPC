@@ -147,6 +147,7 @@ fn main() {
             commands::seed_logs,
             commands::export_logs,
             commands::clear_icon_cache,
+            commands::get_icon_cache,
             commands::ui_log,
             commands::copy_text,
             commands::app_icon_url,

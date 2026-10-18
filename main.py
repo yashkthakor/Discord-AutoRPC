@@ -262,6 +262,9 @@ def _poll_loop(
         state["current_app"] = app
 
         if app is not None:
+            # Stamp the start time before the icon work: this is the clock Discord is given,
+            # and a slow or retrying fetch must not shift the timer the profile shows (`T-030`).
+            presence.start_epoch(app.exe_path, app.pid)
             icon_url = get_icon_url(app.exe_path, app.display_name, config)
             presence.update(
                 display_name=app.display_name,

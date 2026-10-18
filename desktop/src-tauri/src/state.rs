@@ -29,6 +29,9 @@ pub struct AppInfo {
     pub display_name: String,
     pub tagline: Option<String>,
     pub icon_url: Option<String>,
+    /// The engine's icon retry ladder (`T-030`). `None` when it did not report one.
+    #[serde(default)]
+    pub icon: Option<IconStatus>,
     pub started_at_ms: Option<u64>,
     pub ignored: bool,
 }
@@ -42,10 +45,34 @@ impl AppInfo {
             display_name: display_name.to_string(),
             tagline: None,
             icon_url: None,
+            icon: None,
             started_at_ms: None,
             ignored: false,
         }
     }
+}
+
+/// Where the engine's icon resolution stands for the app on screen (`T-030`).
+///
+/// `state` is `"ok" | "pending" | "parked"`: the URL is in hand, the ladder is between
+/// attempts, or the three attempts failed and the default icon shows until `retry_at_ms`.
+/// A plain string, like every other union on this wire, so a newer engine cannot fail to
+/// deserialize.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconStatus {
+    pub state: String,
+    pub attempts: u32,
+    pub retry_at_ms: Option<u64>,
+    pub reason: Option<String>,
+}
+
+/// One row of `icon_cache.json`, as the settings pane lists it (`T-030`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconCacheEntry {
+    pub path: String,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +86,9 @@ pub struct EngineState {
     pub app: Option<AppInfo>,
     pub recent_apps: Vec<String>,
     pub autostart_enabled: bool,
+    /// The engine's `icon_cache.json`, for the App Names pane (`T-030`). Empty until the
+    /// engine answers — an empty list means "not asked yet", never "nothing cached".
+    pub icon_cache: Vec<IconCacheEntry>,
 }
 
 impl EngineState {
@@ -72,6 +102,7 @@ impl EngineState {
             app: None,
             recent_apps: Vec::new(),
             autostart_enabled: false,
+            icon_cache: Vec::new(),
         }
     }
 }

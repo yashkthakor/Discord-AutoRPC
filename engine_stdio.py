@@ -10,15 +10,22 @@ Transport: one JSON object per line over stdin/stdout.
 
     shell → engine    {"cmd": "set_paused", "paused": true}
                       {"cmd": "reload_config"}
+                      {"cmd": "clear_icon_cache", "exePaths": ["C:\\Apps\\app.exe"] | null}
+                      {"cmd": "get_icon_cache"}
                       {"cmd": "quit"}
     engine → shell    {"type": "ready",    "version": "0.1.0-beta", "pid": 4242}
                       {"type": "builtins", "taglines": {"notion.exe": "Working on a document"}}
                       {"type": "discord",  "status": "connected"}
                       {"type": "app",      "app": {...AppInfo...} | null}
+                      {"type": "icon_cache", "entries": [{"path": "c:\\apps\\app.exe", "url": "https://..."}]}
                       {"type": "log",      "level": "INFO", "logger": "autorpc.detector", "message": "..."}
                       {"type": "update",   "tag": "0.1.1", "url": "https://..."}
                       {"type": "toast",    "kind": "error", "message": "..."}
                       {"type": "fatal",    "message": "..."}
+
+`AppInfo` carries an `icon` object — `{"state": "ok" | "pending" | "parked", "attempts": n,
+"retryAtMs": ms | null, "reason": str | null}` — so the Status pane can say *why* an icon is
+the default instead of just showing one (`T-030`).
 
 Three rules keep the seam honest:
 
@@ -43,7 +50,7 @@ from typing import Any
 
 from config import get_data_dir, is_configured, load_config
 from detector import AppInfo, Detector, built_in_taglines, is_discord_running, is_ignored
-from icons import get_icon_url
+from icons import cached_icons, clear_icon_cache, get_icon_url, icon_state
 from presence import PresenceManager
 from updater import __version__, check_for_updates
 
@@ -178,6 +185,10 @@ class Engine:
         self._detector: Detector | None = None
         self._presence: PresenceManager | None = None
 
+        # Icon cache intent, recorded by the reader thread and applied by the loop (`T-030`).
+        self._icon_clear_requested = False
+        self._icon_clear_paths: list[str] | None = None
+
         self._app_id = ""
         self._discord_status = ""
         self._last_app: dict | None = None
@@ -269,6 +280,14 @@ class Engine:
                 logger.info("Paused from the shell" if paused else "Resumed from the shell")
         elif command == "reload_config":
             self._reload_requested = True
+        elif command == "clear_icon_cache":
+            paths = message.get("exePaths")
+            self._icon_clear_paths = [str(path) for path in paths] if isinstance(paths, list) else None
+            self._icon_clear_requested = True
+        elif command == "get_icon_cache":
+            # Read-only and stateless, so the reader thread answers directly: the settings
+            # pane wants the list on the next frame, not on the next poll.
+            self.send({"type": "icon_cache", "entries": cached_icons()})
         elif command == "quit":
             logger.info("Quit requested by the shell")
             self._quit.set()
@@ -286,6 +305,10 @@ class Engine:
                 self._apply_config(load_config())
             else:
                 self._reload_if_changed()
+
+            # Applies per-app or full icon-cache clears from the shell before anything is
+            # resolved this cycle, so the refreshed icon is the one that gets announced.
+            self._drain_icon_requests()
 
             if self._paused:
                 self._clear_once_while_paused()
@@ -363,6 +386,11 @@ class Engine:
             self._forget_app()
             return
 
+        # Stamp the start time before any icon work: Discord's timer must count from when the
+        # app was detected, not from when a slow or retrying icon fetch finished (`T-030`).
+        if self._presence is not None:
+            self._presence.start_epoch(app.exe_path, app.pid)
+
         icon_url = get_icon_url(app.exe_path, app.display_name, self._config)
         if self._presence is not None:
             self._presence.update(
@@ -374,6 +402,28 @@ class Engine:
             )
 
         self._announce(app, icon_url)
+
+    def _drain_icon_requests(self) -> None:
+        """Apply a `clear_icon_cache` from the shell, then publish the refreshed listing."""
+        if not self._icon_clear_requested:
+            return
+
+        self._icon_clear_requested = False
+        requested = self._icon_clear_paths
+        self._icon_clear_paths = None
+
+        cleared = clear_icon_cache(requested)
+        self.send({"type": "icon_cache", "entries": cached_icons()})
+        self.send({
+            "type": "toast",
+            "kind": "info",
+            "message": (
+                f"Cleared {cleared} cached icon{'s' if cleared != 1 else ''} — "
+                f"fetching again on the next poll."
+                if cleared
+                else "No cached icon to clear — trying again on the next poll."
+            ),
+        })
 
     def _announce(self, app: AppInfo, icon_url: str) -> None:
         """Tell the shell what is on screen, once per distinct answer."""
@@ -390,6 +440,8 @@ class Engine:
             "displayName": app.display_name,
             "tagline": app.tagline or None,
             "iconUrl": icon_url or None,
+            # Why the icon is what it is — the Status pane shows the ladder's state (`T-030`).
+            "icon": icon_state(app.exe_path),
             "startedAtMs": started * 1000,
             "ignored": is_ignored(app, self._config),
         }
