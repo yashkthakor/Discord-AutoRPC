@@ -4,7 +4,8 @@ icons.py — Extract exe icons, upload to a public host, cache results.
 Pipeline:
   1. Check icon_cache.json for an existing URL.
   2. (Optional) Query SteamGridDB for a polished icon.
-  3. Extract the icon from the exe via the Windows Shell API.
+  3. Extract the icon from the exe via the Windows Shell API — or, for MSIX/Store apps
+     whose stub exe has no icon resource, from the package's manifest assets.
   4. Upload the PNG to a public host (the configured one, then failover).
   5. Verify the URL length and content-type.
   6. Cache the result, or schedule the next attempt on a bounded ladder (`T-030`).
@@ -23,6 +24,7 @@ import logging
 import struct
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -192,7 +194,10 @@ def _extract_icon_image(exe_path: str, size: int = 256) -> Image.Image | None:
     """
     Extract the highest resolution icon from *exe_path* and return it as a
     clean RGBA PIL Image.
-    Prioritizes PrivateExtractIconsW (native 256x256), falling back to ExtractIconEx.
+    Prioritizes PrivateExtractIconsW (native 256x256), falling back to ExtractIconEx,
+    then — for MSIX/Store apps whose stub exe carries no icon resource — the package's
+    manifest assets (`T9` probe: shell icon routes only answer with the generic
+    placeholder for these exes, so the manifest is the only honest source).
     """
     try:
         # --- Approach 1: PrivateExtractIconsW for native 256x256 icon resource ---
@@ -210,16 +215,29 @@ def _extract_icon_image(exe_path: str, size: int = 256) -> Image.Image | None:
                 return img
 
         # --- Approach 2: Fallback to ExtractIconEx (standard system icon) ---
-        large_icons, small_icons = win32gui.ExtractIconEx(exe_path, 0, 1)
-        if large_icons:
-            hicon = large_icons[0]
-            for h in small_icons:
-                win32gui.DestroyIcon(h)
-            img = _hicon_to_pil(hicon, size)
-            win32gui.DestroyIcon(hicon)
-            if img:
-                logger.debug(f"Extracted fallback icon via ExtractIconEx for {exe_path}")
-                return img
+        try:
+            large_icons, small_icons = win32gui.ExtractIconEx(exe_path, 0, 1)
+            if large_icons:
+                hicon = large_icons[0]
+                for h in small_icons:
+                    win32gui.DestroyIcon(h)
+                img = _hicon_to_pil(hicon, size)
+                win32gui.DestroyIcon(hicon)
+                if img:
+                    logger.debug(f"Extracted fallback icon via ExtractIconEx for {exe_path}")
+                    return img
+        except Exception as exc:
+            # Local catch: a packaged stub exe can fail here in ways that shouldn't stop
+            # Approach 3 from reading the package assets.
+            logger.debug(f"ExtractIconEx failed for {exe_path}: {exc}")
+
+        # --- Approach 3: MSIX/Store apps: the icon lives in the package's assets ---
+        img = _extract_msix_icon_image(exe_path, size)
+        if img is not None:
+            logger.debug(
+                f"Extracted packaged-app {img.size[0]}x{img.size[1]} icon from package assets for {exe_path}"
+            )
+            return img
 
         logger.debug(f"No icon found in {exe_path}")
         return None
@@ -323,6 +341,178 @@ def _make_bitmapinfo(width: int, height: int):
     bmi.bmiHeader.biBitCount = 32
     bmi.bmiHeader.biCompression = 0  # BI_RGB
     return ctypes.byref(bmi)
+
+
+# ---------------------------------------------------------------------------
+# Packaged (MSIX/Store) app icons (T9 probe)
+# ---------------------------------------------------------------------------
+# A Store app's foreground exe is a stub with no icon resource (WhatsApp's
+# `...\WindowsApps\...\WhatsApp.Root.exe`), so PrivateExtractIconsW/ExtractIconEx fail and
+# even the shell routes (SHGetFileInfoW, SHGetImageList JUMBO, IShellItemImageFactory) only
+# answer with Windows' generic placeholder. What Windows itself displays for these apps
+# lives in the package: `AppxManifest.xml` -> `<uap:VisualElements>` logo attributes, and
+# those PNG files are readable by the user. Probe (2026-10-18) confirmed the manifest route
+# returns the real 256x256 icon where every shell route returns the placeholder.
+
+#: Logo attributes to consider, most "app icon"-like first.
+_MSIX_LOGO_ATTRS = ("Square44x44Logo", "Square150x150Logo", "Square310x310Logo", "Square71x71Logo")
+
+#: Asset variant suffixes to try for one logo reference, most preferred first. `unplated`
+#: means a transparent background — the same look icons.py produces for classic apps.
+_MSIX_VARIANT_SUFFIXES = (
+    ".targetsize-256_altform-unplated.png",
+    ".targetsize-256.png",
+    ".targetsize-256_altform-lightunplated.png",
+    ".scale-400_altform-unplated.png",
+    ".scale-400.png",
+    ".scale-200_altform-unplated.png",
+    ".scale-200.png",
+    ".scale-100_altform-unplated.png",
+    ".scale-100.png",
+    ".png",
+)
+
+#: Parsed manifests keyed by package directory. The path carries the package version, so
+#: an update yields a new key; the bound just keeps a very long session from growing.
+_MSIX_MANIFEST_CACHE: dict[str, tuple[dict[str, dict[str, str]], dict[str, str]] | None] = {}
+_MSIX_MANIFEST_CACHE_MAX = 32
+
+
+def _parse_appx_manifest(pkg_dir: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]] | None:
+    """
+    Parse ``AppxManifest.xml`` in *pkg_dir*.
+
+    Returns ``(by_exe, first)`` — executable basename (lowercase) → ``{logo attr: relative
+    asset path}``, plus the first application's logos as a fallback. ``None`` when the
+    manifest is missing, unreadable, or malformed; both outcomes are cached for the
+    session, since neither can change without a package update (which changes the path).
+    """
+    key = str(pkg_dir).lower()
+    if key in _MSIX_MANIFEST_CACHE:
+        return _MSIX_MANIFEST_CACHE[key]
+
+    result = None
+    try:
+        with open(pkg_dir / "AppxManifest.xml", "r", encoding="utf-8", errors="replace") as fh:
+            root = ET.fromstring(fh.read())
+
+        by_exe: dict[str, dict[str, str]] = {}
+        first: dict[str, str] = {}
+        for el in root.iter():
+            # Namespace prefixes vary between manifest schema versions; match on local name.
+            if el.tag.rsplit("}", 1)[-1] != "Application":
+                continue
+            logos: dict[str, str] = {}
+            for sub in el.iter():
+                if sub.tag.rsplit("}", 1)[-1] not in ("VisualElements", "DefaultTile"):
+                    continue
+                for attr, value in sub.attrib.items():
+                    if value.lower().endswith(".png"):
+                        logos.setdefault(attr, value)
+            if not logos:
+                continue
+            exe = (el.get("Executable") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if exe:
+                by_exe[exe] = {**by_exe.get(exe, {}), **logos}
+            if not first:
+                first = logos
+
+        result = (by_exe, first)
+        logger.debug(f"Parsed AppxManifest.xml for {pkg_dir.name} ({len(by_exe)} application(s))")
+    except Exception as exc:
+        logger.debug(f"Could not read packaged-app manifest in {pkg_dir}: {exc}")
+
+    if len(_MSIX_MANIFEST_CACHE) >= _MSIX_MANIFEST_CACHE_MAX:
+        _MSIX_MANIFEST_CACHE.pop(next(iter(_MSIX_MANIFEST_CACHE)))
+    _MSIX_MANIFEST_CACHE[key] = result
+    return result
+
+
+def _find_package_root(exe_path: str) -> Path | None:
+    """Walk up from *exe_path* to the packaged-app root (the directory with AppxManifest.xml)."""
+    d = Path(exe_path).parent
+    for _ in range(4):
+        if (d / "AppxManifest.xml").is_file():
+            return d
+        if d.parent == d:
+            break
+        d = d.parent
+    return None
+
+
+def _msix_asset_candidates(pkg_dir: Path, rel: str) -> list[str]:
+    """
+    Every existing variant of one manifest logo reference, most preferred first —
+    256 px `targetsize` with a transparent background, then the scale variants, then
+    the plain file the manifest names, then any unlisted variant the package ships.
+    """
+    rel_path = Path(rel.replace("\\", "/"))
+    directory = pkg_dir / rel_path.parent
+    stem = rel_path.stem
+
+    candidates: list[str] = []
+    for suffix in _MSIX_VARIANT_SUFFIXES:
+        cand = directory / f"{stem}{suffix}"
+        if cand.is_file() and str(cand) not in candidates:
+            candidates.append(str(cand))
+
+    # Safety net: any variant whose name starts with the stem, ranked the same way.
+    try:
+        variants = [
+            p.name for p in directory.iterdir()
+            if p.name.startswith(stem + ".") and p.suffix.lower() == ".png"
+        ]
+    except OSError:
+        variants = []
+
+    def rank(name: str) -> tuple[int, int, str]:
+        size_rank = 0 if "targetsize-256" in name else 1 if "scale-400" in name else 2
+        bg_rank = 0 if "unplated" in name else 1
+        return (size_rank, bg_rank, name)
+
+    for name in sorted(variants, key=rank):
+        cand = directory / name
+        if cand.is_file() and str(cand) not in candidates:
+            candidates.append(str(cand))
+    return candidates
+
+
+def _extract_msix_icon_image(exe_path: str, size: int = 256) -> Image.Image | None:
+    """
+    Packaged (MSIX/Store) app icon from the package's manifest assets — the artwork
+    Windows itself shows for the app. Returns ``None`` for non-packaged paths and for
+    anything unreadable, so the caller's normal failure path still applies.
+    """
+    if "\\windowsapps\\" not in exe_path.replace("/", "\\").lower():
+        return None
+    pkg_dir = _find_package_root(exe_path)
+    if pkg_dir is None:
+        return None
+    parsed = _parse_appx_manifest(pkg_dir)
+    if parsed is None:
+        return None
+
+    by_exe, first = parsed
+    logos = by_exe.get(Path(exe_path).name.lower()) or first
+    for attr in _MSIX_LOGO_ATTRS:
+        rel = logos.get(attr)
+        if not rel:
+            continue
+        for asset in _msix_asset_candidates(pkg_dir, rel):
+            try:
+                with Image.open(asset) as src:
+                    img = src.convert("RGBA")
+                # Square logos only: a non-square asset under a Square* attribute is a
+                # broken manifest, and stretching it would look worse than the default.
+                if min(img.size) < 16 or not 0.95 <= img.width / img.height <= 1.05:
+                    continue
+                if img.size != (size, size):
+                    img = img.resize((size, size), Image.LANCZOS)
+                logger.debug(f"Packaged-app icon for {exe_path} from package asset {Path(asset).name}")
+                return img
+            except Exception as exc:
+                logger.debug(f"Packaged-app asset {asset} could not be used: {exc}")
+    return None
 
 
 # ---------------------------------------------------------------------------
